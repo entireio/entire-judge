@@ -115,9 +115,20 @@ func agentLeverageLens(m Metrics) LensResult {
 // categories are flagged so the jury sees them rather than a silently averaged
 // number.
 func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
+	// Only evidence-backed lens scores count toward the composite. An LLM lens
+	// that returned a score but whose evidence anchors did not resolve against
+	// the brain (Supported == false) is excluded rather than allowed to move the
+	// composite on unverifiable grounds — otherwise a team is penalized for the
+	// brain not capturing its prompts (e.g. an agent that exposes no prompt text)
+	// instead of for weak work. The deterministic lenses are always supported.
 	scores := map[string]float64{}
+	scored := map[string]bool{}
 	for _, lens := range lenses {
-		if lens.Score != nil {
+		if lens.Score == nil {
+			continue
+		}
+		scored[lens.Lens] = true
+		if lens.Supported {
 			scores[lens.Lens] = *lens.Score
 		}
 	}
@@ -148,12 +159,16 @@ func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
 	if hasOutcome {
 		composite += outcome * weightOutcome
 		weightUsed += weightOutcome
+	} else if scored[LensOutcome] {
+		flags = append(flags, "idea_plan_execution_unsupported")
 	} else {
 		flags = append(flags, "idea_plan_execution_unscored")
 	}
 	if hasPrompting {
 		composite += prompting * weightPrompting
 		weightUsed += weightPrompting
+	} else if scored[LensPrompting] {
+		flags = append(flags, "prompting_skill_unsupported")
 	} else {
 		flags = append(flags, "prompting_skill_unscored")
 	}

@@ -291,6 +291,45 @@ func TestAuthenticityLensDeterministic(t *testing.T) {
 	}
 }
 
+func TestCompositeExcludesUnsupportedLLMLens(t *testing.T) {
+	score := func(v float64) *float64 { return &v }
+	// prompting_skill returned a score but no evidence anchor resolved
+	// (Supported == false) — e.g. an agent whose sessions expose no prompt text.
+	// It must be excluded from the composite and flagged, not folded in at 1/5.
+	lenses := []LensResult{
+		{Lens: LensAuthenticity, Score: score(4.5), Supported: true},
+		{Lens: LensPrompting, Score: score(1), Supported: false},
+		{Lens: LensOutcome, Score: score(5), Supported: true},
+		{Lens: LensEffort, Score: score(5), Supported: true},
+		{Lens: LensAgent, Supported: true},
+	}
+	composite, flags := compositeAndFlags(lenses, Metrics{TimelineCategory: TimelineCleanStart})
+	if composite == nil {
+		t.Fatal("composite nil; deterministic lenses keep it computable")
+	}
+	// Renormalized over authenticity (.30) + outcome (.30) + effort (.20); the
+	// unsupported prompting lens (.20) is dropped from both sum and weight.
+	want := (4.5*weightAuthenticity + 5*weightOutcome + 5*weightEffort) /
+		(weightAuthenticity + weightOutcome + weightEffort)
+	if diff := *composite - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("composite = %.4f, want %.4f (unsupported prompting must be excluded)", *composite, want)
+	}
+	hasFlag := func(f string) bool {
+		for _, g := range flags {
+			if g == f {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasFlag("prompting_skill_unsupported") {
+		t.Errorf("flags %v missing prompting_skill_unsupported", flags)
+	}
+	if hasFlag("prompting_skill_unscored") {
+		t.Errorf("flags %v: scored-but-unsupported lens must not be labeled unscored", flags)
+	}
+}
+
 func TestSubmissionIDFromKey(t *testing.T) {
 	cases := map[string]string{
 		"github.com/team/project": "gh/team/project",
