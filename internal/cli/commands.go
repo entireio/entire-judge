@@ -22,8 +22,8 @@ import (
 func newRunCommand(opts Options) *cobra.Command {
 	var flags runFlags
 	cmd := &cobra.Command{
-		Use:   "run [path]",
-		Short: "Score one submission's brain with the judge lenses",
+		Use:   "run [repo]",
+		Short: "Score a single submission repo with the judge lenses",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runJudgeRun(cmd, opts, flags, resolveRepoDir(opts.Env, args))
@@ -70,7 +70,7 @@ func newRankCommand(opts Options) *cobra.Command {
 	var flags runFlags
 	cmd := &cobra.Command{
 		Use:   "rank [dir]",
-		Short: "Rank a directory of submission brains into an advisory table",
+		Short: "Rank a directory of submission repos into an advisory table",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
