@@ -92,12 +92,12 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 	if err != nil {
 		return err
 	}
-	brainDirs, err := discoverBrainDirs(dir)
+	checkouts, err := discoverSubmissionCheckouts(dir)
 	if err != nil {
 		return err
 	}
-	if len(brainDirs) == 0 {
-		return fmt.Errorf("no_brains: no exported brains found under %s", dir)
+	if len(checkouts) == 0 {
+		return fmt.Errorf("no_submissions: no git checkouts found under %s (point rank at a directory of submission repos)", dir)
 	}
 
 	run := agent.DefaultRunner(flags.agent)
@@ -123,12 +123,17 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 	}
 
 	var reports []judge.RunReport
-	for _, brainDir := range brainDirs {
-		repoDir := filepath.Dir(brainDir) // best-effort: the brain dir's parent
-		key := keyForBrainDir(dir, brainDir)
-		sub, serr := judge.Submit(cmd.Context(), opts.Runner, run, repoDir, brainDir, key, params, opts.Now())
+	for _, checkout := range checkouts {
+		// Resolve each submission's brain exactly as `run` does, so the
+		// commit-timeline lens reads the real checkout (not a brain-dir parent).
+		storage := resolveBrainStorage(cmd.Context(), opts.Runner, opts.Env, checkout)
+		if !brainstore.Exists(storage.BrainDir) {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("%s: no exported brain (run `entire brain refresh` first)", filepath.Base(checkout)))
+			continue
+		}
+		sub, serr := judge.Submit(cmd.Context(), opts.Runner, run, checkout, storage.BrainDir, storage.Key, params, opts.Now())
 		if serr != nil {
-			report.Warnings = append(report.Warnings, fmt.Sprintf("%s: %v", filepath.Base(brainDir), serr))
+			report.Warnings = append(report.Warnings, fmt.Sprintf("%s: %v", filepath.Base(checkout), serr))
 			continue
 		}
 		// Hard gates: degenerate timelines are excluded from the ordered table
@@ -206,13 +211,22 @@ func compositeOf(r judge.RunReport) float64 {
 	return *r.Composite
 }
 
-// discoverBrainDirs walks dir (one level) looking for subdirectories that hold an
-// exported brain (a manifest). The dir itself is included when it is a brain.
-func discoverBrainDirs(dir string) ([]string, error) {
-	var dirs []string
-	if brainstore.Exists(dir) {
+// isGitCheckout reports whether dir is a git working tree (a .git directory or,
+// for worktrees/submodules, a .git file).
+func isGitCheckout(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// discoverSubmissionCheckouts finds the submission repositories to rank under dir.
+// A submission is a git checkout, so the commit-timeline lens has a real repo to
+// read and each brain resolves the same way `run` resolves it. If dir is itself a
+// checkout it is the sole submission; otherwise each immediate subdirectory that
+// is a checkout is a submission.
+func discoverSubmissionCheckouts(dir string) ([]string, error) {
+	if isGitCheckout(dir) {
 		abs, _ := filepath.Abs(dir)
-		dirs = append(dirs, abs)
+		return []string{abs}, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -221,29 +235,19 @@ func discoverBrainDirs(dir string) ([]string, error) {
 		}
 		return nil, err
 	}
+	var dirs []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		candidate := filepath.Join(dir, entry.Name())
-		if brainstore.Exists(candidate) {
+		if isGitCheckout(candidate) {
 			abs, _ := filepath.Abs(candidate)
 			dirs = append(dirs, abs)
 		}
 	}
 	sort.Strings(dirs)
 	return dirs, nil
-}
-
-// keyForBrainDir derives a stable submission key from a discovered brain dir,
-// relative to the rank root, so SubmissionIDFromKey produces a readable id.
-func keyForBrainDir(root, brainDir string) string {
-	absRoot, _ := filepath.Abs(root)
-	rel, err := filepath.Rel(absRoot, brainDir)
-	if err != nil || rel == "." || rel == "" {
-		return filepath.Base(brainDir)
-	}
-	return filepath.ToSlash(rel)
 }
 
 func writeJSON(cmd *cobra.Command, value any) error {
