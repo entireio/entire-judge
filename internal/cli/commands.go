@@ -22,8 +22,8 @@ import (
 func newRunCommand(opts Options) *cobra.Command {
 	var flags runFlags
 	cmd := &cobra.Command{
-		Use:   "run [repo]",
-		Short: "Score a single submission repo with the judge lenses",
+		Use:   "run [path]",
+		Short: "Score one submission repo and print its detailed report",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runJudgeRun(cmd, opts, flags, resolveRepoDir(opts.Env, args))
@@ -69,7 +69,7 @@ func runJudgeRun(cmd *cobra.Command, opts Options, flags runFlags, repoDir strin
 func newRankCommand(opts Options) *cobra.Command {
 	var flags runFlags
 	cmd := &cobra.Command{
-		Use:   "rank [dir]",
+		Use:   "rank [path]",
 		Short: "Rank a directory of submission repos into an advisory table",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -185,8 +185,8 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 func newWatchCommand(opts Options) *cobra.Command {
 	var flags runFlags
 	cmd := &cobra.Command{
-		Use:   "watch [dir]",
-		Short: "Browse ranked submissions in an interactive view",
+		Use:   "watch [path]",
+		Short: "Browse a directory of submission repos in an interactive view",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."

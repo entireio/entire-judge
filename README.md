@@ -13,12 +13,14 @@ This plugin builds a binary named `entire-judge`, which is invoked through Entir
 as:
 
 ```sh
-entire judge run [repo] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--json] [--plain]
-entire judge rank [dir] [--started-at RFC3339] [--json] [--plain]
-entire judge watch [dir]
+entire judge run [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--json] [--plain]
+entire judge rank [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--json] [--plain]
+entire judge watch [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339]
 entire judge version
 
-# `run` takes one submission repo; `rank`/`watch` take a directory of submission repos.
+# All three take a [path]; the verb decides what happens to it.
+# `run` scores one submission repo (detailed report); `rank` and `watch` take a
+# directory of submission repos (ranked table / interactive view).
 ```
 
 It is fully self-contained: it reads the brain's on-disk export directly and does
