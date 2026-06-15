@@ -1,0 +1,451 @@
+package judge
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/suhaanthayyil/entire-judge/internal/agent"
+	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
+	"github.com/suhaanthayyil/entire-judge/internal/gitutil"
+)
+
+const (
+	// contextMaxBytes hard-caps the assembled brief handed to a lens agent.
+	contextMaxBytes = 96 * 1024
+	// excerptMaxBytes bounds the human-prompt excerpt section specifically.
+	excerptMaxBytes = 64 * 1024
+	// LensTimeout is the default per-lens agent timeout.
+	LensTimeout = 5 * time.Minute
+
+	contextMarker = "${SUBMISSION_CONTEXT}"
+	metricsMarker = "${METRICS_JSON}"
+)
+
+// submissionContext bundles everything a lens needs to score a submission: the
+// resolved brain location, the loaded data, the deterministic metrics, and a
+// bounded brief assembled from facts + human-prompt excerpts + a timeline
+// summary.
+type submissionContext struct {
+	RepoDir  string
+	BrainDir string
+	RepoKey  string
+	Branch   string
+
+	Manifest *brainstore.Manifest
+	Sessions []brainstore.Session
+	Facts    []brainstore.FactRecord
+	Coverage *gitutil.HistoryCoverage
+	Metrics  Metrics
+
+	Brief string
+}
+
+// buildBrief renders the bounded text brief: a deterministic timeline summary, a
+// facts section ("kind|paths|text" lines), and human-prompt-only session
+// excerpts. The whole thing is hard-capped at contextMaxBytes.
+func buildBrief(sc submissionContext) string {
+	var b strings.Builder
+
+	b.WriteString("## Deterministic timeline\n\n")
+	b.WriteString(timelineSummary(sc.Metrics))
+	b.WriteString("\n")
+
+	if len(sc.Facts) > 0 {
+		b.WriteString("\n## Durable facts (kind|paths|text)\n\n")
+		for _, fact := range sc.Facts {
+			line := fmt.Sprintf("%s|%s|%s",
+				strings.TrimSpace(fact.Kind),
+				strings.Join(fact.Paths, ","),
+				strings.Join(strings.Fields(fact.Text), " "),
+			)
+			b.WriteString(truncateString(line, 600))
+			b.WriteString("\n")
+			if b.Len() > contextMaxBytes/2 {
+				b.WriteString("... (facts truncated)\n")
+				break
+			}
+		}
+	}
+
+	excerpts := humanPromptExcerpts(sc, excerptMaxBytes)
+	if excerpts != "" {
+		b.WriteString("\n## Human prompts (session excerpts)\n\n")
+		b.WriteString(excerpts)
+	}
+
+	out := b.String()
+	if len(out) > contextMaxBytes {
+		out = truncateString(out, contextMaxBytes)
+	}
+	return out
+}
+
+// timelineSummary renders the deterministic metrics as a compact factual summary
+// for the brief. It states the category and the load-bearing counts so a lens can
+// explain — but not invent — the verdict.
+func timelineSummary(m Metrics) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "category: %s (%s)\n", m.TimelineCategory, m.TimelineReason)
+	fmt.Fprintf(&b, "sessions: %d, human prompts: %d, turns: %d, files touched: %d, facts: %d\n",
+		m.Sessions, m.HumanPrompts, m.Turns, m.FilesTouched, m.Facts)
+	fmt.Fprintf(&b, "commits: total %d, pre-session %d, covered %d, missing-session %d, no-session-history %d, merges %d\n",
+		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.MissingSessionCommits, m.NoSessionHistory, m.MergeCommits)
+	fmt.Fprintf(&b, "tokens: input %d, output %d, cache-read %d, cache-creation %d\n",
+		m.InputTokens, m.OutputTokens, m.CacheReadTokens, m.CacheCreationTokens)
+	if m.FirstSessionAt != nil {
+		fmt.Fprintf(&b, "first session: %s\n", m.FirstSessionAt.UTC().Format(time.RFC3339))
+	}
+	if m.LastSessionAt != nil {
+		fmt.Fprintf(&b, "last session: %s\n", m.LastSessionAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "time on task: %.1f minutes\n", m.TimeOnTaskMinutes)
+	if m.PrimaryAgent != "" {
+		fmt.Fprintf(&b, "primary agent: %s\n", m.PrimaryAgent)
+	}
+	return b.String()
+}
+
+// humanPromptExcerpts extracts the human turns from each session's transcript and
+// concatenates them under a byte budget. A session whose transcript is unreadable
+// is silently skipped — the brief degrades, it does not fail.
+func humanPromptExcerpts(sc submissionContext, maxBytes int) string {
+	var b strings.Builder
+	for i := range sc.Sessions {
+		session := sc.Sessions[i]
+		if session.TranscriptPath == "" {
+			continue
+		}
+		raw, err := brainstore.ReadRelativeFile(sc.BrainDir, session.TranscriptPath)
+		if err != nil {
+			continue
+		}
+		prompts := brainstore.ExtractHumanPrompts(raw)
+		if len(prompts) == 0 {
+			continue
+		}
+		header := fmt.Sprintf("### session %s", session.SessionID)
+		if session.Branch != "" {
+			header += " (" + session.Branch + ")"
+		}
+		b.WriteString(header)
+		b.WriteString("\n")
+		for _, p := range prompts {
+			line := "- " + truncateString(strings.Join(strings.Fields(p), " "), 500)
+			if b.Len()+len(line) > maxBytes {
+				b.WriteString("- ... (excerpts truncated)\n")
+				return b.String()
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// loadTemplate loads the system prompt for a named lens template, stripping its
+// YAML frontmatter (the agent runners pass the prompt as a positional arg, so a
+// leading "---" would be parsed as a flag).
+func loadTemplate(templateName string) (string, error) {
+	name := "templates/entire-judge-" + templateName + ".md"
+	data, err := templatesFS.ReadFile(name)
+	if err != nil {
+		return "", fmt.Errorf("read judge template %s: %w", templateName, err)
+	}
+	return stripTemplateFrontmatter(string(data)), nil
+}
+
+func stripTemplateFrontmatter(content string) string {
+	if !strings.HasPrefix(content, "---\n") && !strings.HasPrefix(content, "---\r\n") {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return strings.TrimLeft(strings.Join(lines[i+1:], "\n"), "\r\n")
+		}
+	}
+	return content
+}
+
+// runLens runs one LLM-backed lens: it loads the lens template, substitutes the
+// metrics JSON marker, builds the agent argv (honoring no-egress), and runs the
+// agent with the assembled brief on stdin. The lens output is parsed leniently —
+// a parse failure becomes a warning on the result, never a hard error.
+func runLens(ctx context.Context, sc submissionContext, lensName, templateName, agentName, model, effort string, run agent.Runner, timeout time.Duration) (LensResult, error) {
+	result := LensResult{Lens: lensName}
+
+	prompt, err := loadTemplate(templateName)
+	if err != nil {
+		return result, err
+	}
+
+	metricsJSON, err := json.MarshalIndent(sc.Metrics, "", "  ")
+	if err != nil {
+		return result, err
+	}
+	if strings.Contains(prompt, metricsMarker) {
+		prompt = strings.ReplaceAll(prompt, metricsMarker, string(metricsJSON))
+	}
+
+	content := sc.Brief
+	if strings.Contains(prompt, contextMarker) {
+		prompt = strings.ReplaceAll(prompt, contextMarker, sc.Brief)
+		content = string(metricsJSON)
+	}
+
+	args, err := agent.CommandArgs(agentName, nil, prompt)
+	if err != nil {
+		return result, err
+	}
+	args = agent.InjectModel(args, agentName, model)
+	args = agent.InjectEffort(args, agentName, effort)
+
+	if timeout <= 0 {
+		timeout = LensTimeout
+	}
+	out, err := run(ctx, sc.RepoDir, args, []byte(content), timeout)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("lens agent failed: %v", err))
+		return result, nil
+	}
+	parsed := parseLensOutput(out)
+	parsed.Lens = lensName
+	return parsed, nil
+}
+
+// lensRaw is the on-the-wire shape a lens agent is asked to emit.
+type lensRaw struct {
+	Score    *float64 `json:"score"`
+	Verdict  string   `json:"verdict"`
+	Bullets  []string `json:"bullets"`
+	Evidence []string `json:"evidence"`
+}
+
+// parseLensOutput is the LENIENT parser for a lens agent's stdout. It strips
+// ```json fences, extracts the outer {...} object, unmarshals it, clamps the
+// score to 0-5, and dedupes bullets. On any failure it returns a result carrying
+// a warning and the raw output — it never hard-fails.
+func parseLensOutput(out string) LensResult {
+	result := LensResult{Raw: out}
+	jsonText, ok := extractOuterJSONObject(stripJSONFences(out))
+	if !ok {
+		result.Warnings = append(result.Warnings, "lens output contained no JSON object")
+		return result
+	}
+	var raw lensRaw
+	if err := json.Unmarshal([]byte(jsonText), &raw); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("lens output not valid JSON: %v", err))
+		return result
+	}
+	if raw.Score != nil {
+		s := *raw.Score
+		if s < 0 {
+			s = 0
+		}
+		if s > 5 {
+			s = 5
+		}
+		result.Score = &s
+	}
+	result.Verdict = strings.TrimSpace(raw.Verdict)
+	result.Bullets = dedupeStrings(raw.Bullets)
+	result.Evidence = dedupeStrings(raw.Evidence)
+	return result
+}
+
+// stripJSONFences removes a leading/embedded ```json fence wrapper so the object
+// extractor sees bare JSON. It is tolerant: content without fences is returned
+// unchanged.
+func stripJSONFences(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "```") {
+		return s
+	}
+	if idx := strings.Index(s, "```"); idx >= 0 {
+		rest := s[idx+3:]
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			lang := strings.TrimSpace(rest[:nl])
+			if lang == "json" || lang == "" || !strings.Contains(lang, "{") {
+				rest = rest[nl+1:]
+			}
+		}
+		if closeIdx := strings.Index(rest, "```"); closeIdx >= 0 {
+			rest = rest[:closeIdx]
+		}
+		return strings.TrimSpace(rest)
+	}
+	return s
+}
+
+// extractOuterJSONObject returns the substring from the first '{' to its matching
+// '}', tracking string literals so a brace inside a JSON string does not throw
+// off the balance. ok=false when no balanced object is present.
+func extractOuterJSONObject(s string) (string, bool) {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return "", false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+// dedupeStrings trims and removes empty/duplicate entries while preserving the
+// first-seen order.
+func dedupeStrings(in []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+// validateLensEvidence filters the lens's evidence to anchors that resolve against
+// the brain, records dropped anchors as warnings, and sets Supported when at
+// least one anchor resolves.
+func validateLensEvidence(result *LensResult, sc submissionContext) {
+	kept, dropped := validateEvidenceAnchors(sc, result.Evidence)
+	result.Evidence = kept
+	for _, d := range dropped {
+		result.Warnings = append(result.Warnings, "dropped unresolvable evidence anchor: "+truncateString(d, 120))
+	}
+	result.Supported = len(kept) > 0
+}
+
+// validateEvidenceAnchors filters an evidence list to anchors that resolve against
+// the brain: a commit hash that appears in the coverage, or a session id that
+// exists in the manifest. Unresolvable anchors are dropped (and reported).
+func validateEvidenceAnchors(sc submissionContext, evidence []string) (kept, dropped []string) {
+	sessionIDs := map[string]struct{}{}
+	for i := range sc.Sessions {
+		sessionIDs[strings.ToLower(sc.Sessions[i].SessionID)] = struct{}{}
+	}
+	commitHashes := map[string]struct{}{}
+	if sc.Coverage != nil {
+		for i := range sc.Coverage.UncoveredCommits {
+			commitHashes[strings.ToLower(sc.Coverage.UncoveredCommits[i].Hash)] = struct{}{}
+		}
+	}
+	for _, anchor := range evidence {
+		if anchorResolves(anchor, sessionIDs, commitHashes) {
+			kept = append(kept, anchor)
+		} else {
+			dropped = append(dropped, anchor)
+		}
+	}
+	return kept, dropped
+}
+
+// anchorResolves reports whether an evidence string references a known session id
+// or a known commit hash. It tokenizes the anchor so an anchor like "commit
+// abc1234: fixed the bug" still matches the bare hash, and matches a commit hash
+// by prefix (agents routinely cite short hashes).
+func anchorResolves(anchor string, sessionIDs, commitHashes map[string]struct{}) bool {
+	lower := strings.ToLower(anchor)
+	if _, ok := sessionIDs[strings.TrimSpace(lower)]; ok {
+		return true
+	}
+	for _, tok := range strings.FieldsFunc(lower, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		if _, ok := sessionIDs[tok]; ok {
+			return true
+		}
+		if len(tok) >= 7 {
+			for hash := range commitHashes {
+				if strings.HasPrefix(hash, tok) || strings.HasPrefix(tok, hash) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// sortedAgentHistogram renders an agent histogram as a deterministic
+// "agent×count" slice, most-used first then alphabetical.
+func sortedAgentHistogram(histogram map[string]int) []string {
+	type pair struct {
+		agent string
+		count int
+	}
+	pairs := make([]pair, 0, len(histogram))
+	for a, c := range histogram {
+		pairs = append(pairs, pair{a, c})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].count != pairs[j].count {
+			return pairs[i].count > pairs[j].count
+		}
+		return pairs[i].agent < pairs[j].agent
+	})
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, fmt.Sprintf("%s×%d", p.agent, p.count))
+	}
+	return out
+}
+
+// truncateString cuts value to at most max bytes on a rune boundary, appending
+// an ellipsis when it truncates.
+func truncateString(value string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(value) <= max {
+		return value
+	}
+	limit := max
+	suffix := ""
+	if max > 3 {
+		limit = max - 3
+		suffix = "..."
+	}
+	cut := limit
+	for cut > 0 && !utf8RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut] + suffix
+}
+
+func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
