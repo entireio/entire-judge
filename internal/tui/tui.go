@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/suhaanthayyil/entire-judge/internal/judge"
 )
@@ -44,6 +45,7 @@ type Model struct {
 	leftInner     int
 	rightInner    int
 	paneContentH  int
+	tableCapacity int // data rows the table shows without scrolling
 	detailWidth   int
 	ready         bool
 }
@@ -137,9 +139,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateMouse handles wheel scrolling (scrolls the detail page) and left-click
-// (click a list row to open it, or click the detail pane to focus it for
-// scrolling). Click-to-row maps the click Y to a table data row given the fixed
-// top chrome: title(0) tabs(1) pane-border(2) table-header(3) first-row(4).
+// (click a list row to open it, or click the detail pane to focus it). The chrome
+// above the first list data row is: title(0) tabs(1) pane-top-border(2)
+// header-text(3) header-bottom-border(4) first-row(5) — the bubbles/table header
+// is two physical lines because of its bottom border. bubbles v1.0.0 exposes no
+// scroll offset, so a click is only hit-tested when the whole list fits unscrolled
+// (len <= tableCapacity); a scrolled list just focuses the page for the current
+// selection rather than risk selecting the wrong row.
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.filtering {
 		return m, nil
@@ -155,11 +161,11 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.focusDetail = true
 			return m, nil
 		}
-		if row := msg.Y - 4; row >= 0 && row < len(m.visible) {
+		if row := msg.Y - 5; len(m.visible) <= m.tableCapacity && row >= 0 && row < len(m.visible) {
 			m.table.SetCursor(row)
-			m.focusDetail = true
 			m.refreshDetail()
 		}
+		m.focusDetail = true
 	}
 	return m, nil
 }
@@ -209,9 +215,13 @@ func (m *Model) resize() {
 	}
 	m.paneContentH = bodyTotalH - 2 // pane borders
 
+	tableHeight := max(m.paneContentH-1, 3)
 	m.table.SetColumns(submissionColumns(m.leftInner))
 	m.table.SetWidth(m.leftInner)
-	m.table.SetHeight(max(m.paneContentH-1, 3))
+	m.table.SetHeight(tableHeight)
+	// Data rows shown = table height minus the 2-line header (text + bottom
+	// border). Used to decide whether a click can be safely hit-tested.
+	m.tableCapacity = max(tableHeight-2, 0)
 
 	m.vp.Width = m.rightInner
 	m.vp.Height = m.paneContentH
@@ -290,7 +300,10 @@ func (m Model) View() string {
 		Width(m.leftInner).Height(m.paneContentH).MaxHeight(m.paneContentH + 2).Render(m.table.View())
 	rightPane := m.theme.paneStyle(m.focusDetail).
 		Width(m.rightInner).Height(m.paneContentH).MaxHeight(m.paneContentH + 2).Render(m.vp.View())
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	// Clip the joined body to the terminal width so the two min-width panes can't
+	// overflow (and wrap) on a narrow terminal.
+	body := lipgloss.NewStyle().MaxWidth(m.width).Render(
+		lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane))
 
 	return strings.Join([]string{title, secondRow, body, m.footerView()}, "\n")
 }
@@ -336,15 +349,12 @@ func ScoreBar(score *float64) string {
 	return strings.Repeat("█", filled) + strings.Repeat("░", cells-filled) + fmt.Sprintf(" %.1f/5", *score)
 }
 
+// truncate shortens value to at most max display columns, on rune boundaries,
+// appending an ellipsis when it cuts. It is display-width aware (multi-byte runes
+// and wide glyphs are measured correctly), so it never splits a UTF-8 rune.
 func truncate(value string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if len(value) <= max {
-		return value
-	}
-	if max <= 3 {
-		return value[:max]
-	}
-	return value[:max-3] + "..."
+	return runewidth.Truncate(value, max, "...")
 }

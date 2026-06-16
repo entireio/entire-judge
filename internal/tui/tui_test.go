@@ -133,6 +133,30 @@ func mustTheme(name string) Theme {
 	return th
 }
 
+func TestClickSelectsCorrectRow(t *testing.T) {
+	th, _ := ThemeByName("default")
+	var ranked []judge.RunReport
+	for i := 0; i < 4; i++ {
+		r := *sampleReport()
+		r.SubmissionID = "gh/team/sub" + string(rune('0'+i))
+		ranked = append(ranked, r)
+	}
+	m := NewModel(ranked, nil, th, judge.RunMetadata{Agent: "x"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40}) // tall: all rows fit, no scroll
+	m = updated.(Model)
+
+	// First data row renders at Y=5 (title 0, tabs 1, pane border 2, header text
+	// 3, header bottom border 4, first row 5). Clicking it must select row 0.
+	u, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 5})
+	if got := u.(Model).table.Cursor(); got != 0 {
+		t.Errorf("click at Y=5 selected row %d, want 0 (off-by-one regression)", got)
+	}
+	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 7})
+	if got := u.(Model).table.Cursor(); got != 2 {
+		t.Errorf("click at Y=7 selected row %d, want 2", got)
+	}
+}
+
 func TestRenderDetailExcludedShowsGate(t *testing.T) {
 	th, _ := ThemeByName("default")
 	r := sampleReport()

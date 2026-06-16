@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/suhaanthayyil/entire-judge/internal/agent"
 )
@@ -135,5 +134,5 @@ func humanizeMinutes(mins float64) string {
 	if mins < 90 {
 		return fmt.Sprintf("%.0f min", mins)
 	}
-	return fmt.Sprintf("%.1f h", (time.Duration(mins) * time.Minute).Hours())
+	return fmt.Sprintf("%.1f h", mins/60)
 }

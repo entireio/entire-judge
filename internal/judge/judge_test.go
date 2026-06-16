@@ -330,6 +330,44 @@ func TestCompositeExcludesUnsupportedLLMLens(t *testing.T) {
 	}
 }
 
+func TestSemanticSummarySection(t *testing.T) {
+	s := &brainstore.SemanticSummary{
+		Symbols:      12,
+		Relations:    5,
+		Files:        3,
+		Capabilities: []string{"go", "routes"},
+		ByKind:       []brainstore.LabelCount{{Label: "function", Count: 8}, {Label: "struct", Count: 4}},
+		ByLanguage:   []brainstore.LabelCount{{Label: "go", Count: 12}},
+		TopFiles:     []brainstore.LabelCount{{Label: "api/routes.go", Count: 7}},
+	}
+	out := semanticSummarySection(s)
+	for _, want := range []string{"What was built", "12 symbols", "function(8)", "routes", "api/routes.go(7)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("section missing %q:\n%s", want, out)
+		}
+	}
+	if semanticSummarySection(nil) != "" {
+		t.Error("nil summary should yield an empty section")
+	}
+	if semanticSummarySection(&brainstore.SemanticSummary{Symbols: 0}) != "" {
+		t.Error("zero-symbol summary should yield an empty section")
+	}
+}
+
+func TestRunSummarySuccess(t *testing.T) {
+	sc := submissionContext{RepoDir: t.TempDir(), Brief: "the brief", Metrics: Metrics{TimelineCategory: TimelineCleanStart}}
+	var run agent.Runner = func(ctx context.Context, dir string, args []string, input []byte, timeout time.Duration) (string, error) {
+		return "```json\n{\"summary\":\"a short overview\"}\n```", nil
+	}
+	got, err := runSummary(context.Background(), sc, Params{Agent: "claude-code"}, run)
+	if err != nil {
+		t.Fatalf("runSummary: %v", err)
+	}
+	if got != "a short overview" {
+		t.Errorf("summary = %q, want %q", got, "a short overview")
+	}
+}
+
 func TestParseSummaryOutput(t *testing.T) {
 	cases := map[string]string{
 		`{"summary":"A clean build."}`:                        "A clean build.",

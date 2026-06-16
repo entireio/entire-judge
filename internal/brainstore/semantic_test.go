@@ -53,3 +53,31 @@ func TestLoadSemanticSummary(t *testing.T) {
 		t.Error("expected nil summary for a nil source")
 	}
 }
+
+func TestLoadSemanticSummaryFileFallback(t *testing.T) {
+	brain := t.TempDir()
+	snapDir := filepath.Join(brain, "semantic", "snapshots", "g")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A snapshot that enumerates only files (no symbol/relation records): the
+	// symbol/relation counts must fall back to the source manifest's totals.
+	ndjson := `{"schema_version":"1.0","provider":"entire-sem"}
+{"record_type":"file","file_path":"a.go"}
+{"record_type":"file","file_path":"b.go"}
+`
+	if err := os.WriteFile(filepath.Join(snapDir, "snapshot.ndjson"), []byte(ndjson), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := &SemanticSource{SnapshotPath: "semantic/snapshots/g/snapshot.ndjson", Symbols: 42, Relations: 7, Files: 9}
+	sum, err := LoadSemanticSummary(brain, src)
+	if err != nil || sum == nil {
+		t.Fatalf("LoadSemanticSummary: sum=%v err=%v", sum, err)
+	}
+	if sum.Files != 2 {
+		t.Errorf("files = %d, want 2 (counted from file records)", sum.Files)
+	}
+	if sum.Symbols != 42 || sum.Relations != 7 {
+		t.Errorf("symbols=%d relations=%d, want 42/7 (fallback to source counts)", sum.Symbols, sum.Relations)
+	}
+}
