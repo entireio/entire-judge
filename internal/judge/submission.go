@@ -87,6 +87,13 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 		report.Warnings = append(report.Warnings, "one or more LLM lenses produced no usable output; deterministic lenses are unaffected")
 	}
 
+	// 6. summary — a short LLM-written overview (what they built, how it went).
+	//    Narrative only, never scored; on failure the renderers fall back to the
+	//    composed summary, so an empty result is not an error condition.
+	if summary, serr := runSummary(ctx, sc, params, run); serr == nil && summary != "" {
+		report.Summary = summary
+	}
+
 	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics)
 	return report, nil
 }
@@ -108,6 +115,19 @@ func assembleSubmissionContext(ctx context.Context, runner gitutil.CommandRunner
 	}
 
 	metrics, coverage := computeMetrics(ctx, runner, repoDir, manifest, brainDir, hackathonStart)
+
+	// Optional entire-sem layer: what the team actually built (code structure).
+	// Absent for brains built without the sem provider; the lenses degrade.
+	if manifest.Sources != nil && manifest.Sources.Semantic != nil {
+		if summary, serr := brainstore.LoadSemanticSummary(brainDir, manifest.Sources.Semantic); serr == nil && summary != nil {
+			sc.Semantic = summary
+			metrics.SemanticSymbols = summary.Symbols
+			metrics.SemanticRelations = summary.Relations
+			metrics.SemanticFiles = summary.Files
+			metrics.SemanticCapabilities = summary.Capabilities
+		}
+	}
+
 	sc.Metrics = metrics
 	sc.Coverage = coverage
 

@@ -13,9 +13,10 @@ This plugin builds a binary named `entire-judge`, which is invoked through Entir
 as:
 
 ```sh
-entire judge run [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--json] [--plain]
-entire judge rank [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--json] [--plain]
-entire judge watch [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339]
+entire judge add <repo-url> [--dir DIR] [--entire-binary BIN] [--build] [--checkpoint-limit N]
+entire judge run [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME] [--json] [--plain]
+entire judge rank [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME] [--json] [--plain]
+entire judge watch [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME]
 entire judge version
 
 # All three take a [path]; the verb decides what happens to it.
@@ -52,6 +53,30 @@ mise run build
 entire plugin install ./entire-judge --force
 ```
 
+## Adding submissions
+
+`entire judge add <repo-url>` readies a submission end to end: it clones the repo
+into `--dir` (default `.`), fetches its Entire checkpoint history
+(`refs/heads/entire/*`), and builds the brain by shelling out to
+`entire brain refresh sessions` (override the binary with `--entire-binary`, or
+pass `--build=false` to clone only). Point `rank`/`watch` at the directory of
+added submissions to score them all.
+
+```sh
+entire judge add https://github.com/team/project --dir ./submissions
+entire judge rank ./submissions --started-at <event-start>
+```
+
+## entire-sem (the execution signal)
+
+`entire judge` reads the brain directly; it does **not** call entire-sem. But when
+a brain was built with the sem provider (`entire brain refresh` records a
+`sources.semantic` layer), the judge reads that snapshot straight from the brain
+and feeds a "What was built" digest (symbol kinds, capabilities, busiest files)
+into the **idea_plan_execution** lens — turning execution scoring from coarse
+file/commit counts into a built-vs-planned comparison. Brains without a sem layer
+score exactly as before.
+
 ## How It Works
 
 `entire-judge` resolves a repository's brain at
@@ -78,7 +103,10 @@ lenses.
 - **prompting_skill** — LLM-scored (0–5). How clearly and effectively the team
   directed their agent, read from the human-prompt excerpts.
 - **idea_plan_execution** — LLM-scored (0–5). The strength of the concept and how
-  coherently it was carried from intent to shipped work.
+  coherently it was carried from intent to shipped work. When the brain carries an
+  **entire-sem** layer (see below), the brief includes a "What was built"
+  code-structure section so the lens can weigh what the team actually built
+  (symbol kinds, routes/tools/workflows, busiest files) against what they planned.
 - **effort_consistency** — deterministic. Rewards sustained, multi-session work
   over a single burst.
 - **agent_leverage** — descriptive (unscored). Which agents the team leaned on.
@@ -87,6 +115,14 @@ The composite weights authenticity (0.30), idea/plan/execution (0.30),
 prompting_skill (0.20), and effort_consistency (0.20); `agent_leverage` is
 descriptive and excluded. A missing LLM lens is renormalized out of the composite
 rather than deflating it.
+
+### Summary
+
+Each submission also carries a short, evidence-grounded **summary** — a 2–3
+sentence overview of what the team built and how it went, written by the same
+agent that drives the lenses. When no agent is available (no-egress, or the agent
+is down) it falls back to a deterministic summary composed from the metrics and
+lens verdicts, so the summary is never blank.
 
 ### Anti-fabrication
 
@@ -114,9 +150,36 @@ off-host); use `--agent ollama`, which is pinned to a loopback-only endpoint.
 ## Output
 
 - `--json` emits the machine-readable report (per-submission or ranking).
-- `--plain` emits a rendered text summary with score bars.
-- Without either, on a TTY the `run`/`rank`/`watch` commands open an interactive
-  browser; on a non-TTY they fall back to the rendered text summary.
+- `--plain` emits a rendered text summary with score bars (and the summary line).
+- Without either, on a TTY the `run`/`rank`/`watch` commands open the interactive
+  **dashboard**; on a non-TTY they fall back to the rendered text summary.
+
+### Dashboard
+
+The dashboard is a sidebar + detail layout: a ranked submission table on the left
+and a per-repo **page** on the right with three sections — **Score** (per-lens
+bars + composite), **Summary**, and **Findings** (the deterministic metrics plus
+each lens's bullets and evidence anchors). Hard-gated submissions live in a
+separate **Excluded** tab so the jury sees them with their gate reason.
+
+- Navigate: `↑/↓` or `j/k` move the selection (the page follows); `enter`/`→`
+  focuses the page to scroll it; `esc`/`←` returns to the list.
+- `tab` switches the Ranked / Excluded sections; `/` filters submissions by id;
+  `?` toggles full help; `q` quits.
+- `--theme` (or `ENTIRE_JUDGE_THEME`) selects a color theme: `default`,
+  `catppuccin`, `gruvbox`, or `tokyonight`.
+
+`rank`/`watch` run the LLM lenses for every submission *before* the dashboard
+opens (progress is printed to stderr while scoring). To avoid re-scoring on every
+launch, **score once and browse instantly**:
+
+```sh
+entire judge rank ./submissions --started-at <t> --json > board.json   # score once
+entire judge watch board.json                                          # opens instantly, no agent
+```
+
+`watch`/`rank` accept either a directory of repos (score live) or a saved
+`--json` report file (load and open immediately).
 
 ## Example
 
@@ -155,5 +218,6 @@ Advisory only: these scores inform the jury's judgment, they do not replace it.
   on-disk manifest, transcripts, and facts.
 - `internal/gitutil` — git execution and the commit-history coverage classifier.
 - `internal/agent` — the lens-agent argv builders and the no-egress-aware runner.
-- `internal/tui` — the interactive submission browser.
+- `internal/tui` — the interactive dashboard (ranked table, per-repo page,
+  sections, filter, help, and the theme registry).
 ```

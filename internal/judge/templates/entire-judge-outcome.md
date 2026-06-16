@@ -15,10 +15,19 @@ Here are the deterministic metrics for the submission:
 ${METRICS_JSON}
 ```
 
-The brain brief (durable facts, human-prompt excerpts, and the timeline summary)
+The brain brief (durable facts, human-prompt excerpts, the timeline summary, and
+— when present — a "What was built" code-structure section from entire-sem)
 arrives on standard input. Use the durable facts for the team's decisions and
 constraints, the prompt excerpts for intent, and the commit/files metrics for
 execution.
+
+If the brief includes a "What was built (code structure from entire-sem)"
+section, weigh it heavily for EXECUTION: compare what the team actually built
+(the symbol kinds, capabilities like routes/tools/workflows, and busiest files)
+against what they planned in the prompts and facts. Reward plans realized in real
+structure; note plans that are described but not reflected in what was built.
+When the section is absent, judge execution from the commit and files metrics as
+before.
 
 Score 0-5 where:
 - 5: a clear, compelling idea; a coherent plan visible across sessions; strong

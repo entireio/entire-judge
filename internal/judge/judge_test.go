@@ -330,6 +330,52 @@ func TestCompositeExcludesUnsupportedLLMLens(t *testing.T) {
 	}
 }
 
+func TestParseSummaryOutput(t *testing.T) {
+	cases := map[string]string{
+		`{"summary":"A clean build."}`:                        "A clean build.",
+		"```json\n{\"summary\":\"Fenced  output\"}\n```":      "Fenced output",
+		"chatter before {\"summary\":\"mid text\"} and after": "mid text",
+		"no json here":                                        "",
+		`{"nope":"x"}`:                                        "",
+	}
+	for in, want := range cases {
+		if got := parseSummaryOutput(in); got != want {
+			t.Errorf("parseSummaryOutput(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestComposeSummaryAndSummaryText(t *testing.T) {
+	score := func(v float64) *float64 { return &v }
+	report := &RunReport{
+		Deterministic: Metrics{
+			TimelineCategory:  TimelineCleanStart,
+			Sessions:          14,
+			FilesTouched:      127,
+			TimeOnTaskMinutes: 433,
+			PrimaryAgent:      "Codex",
+		},
+		Lenses: []LensResult{
+			{Lens: LensOutcome, Score: score(5), Verdict: "Coherent maritime-intelligence platform carried from data to demo."},
+		},
+	}
+	composed := ComposeSummary(report)
+	for _, want := range []string{"Clean start", "maritime-intelligence", "14 sessions", "127 files", "Codex"} {
+		if !strings.Contains(composed, want) {
+			t.Errorf("ComposeSummary missing %q:\n%s", want, composed)
+		}
+	}
+	// SummaryText falls back to the composed summary when no LLM summary is set.
+	if SummaryText(report) != composed {
+		t.Errorf("SummaryText should equal composed summary when report.Summary empty")
+	}
+	// ...and prefers the LLM summary when present.
+	report.Summary = "An LLM-written overview."
+	if SummaryText(report) != "An LLM-written overview." {
+		t.Errorf("SummaryText should return the LLM summary when set")
+	}
+}
+
 func TestSubmissionIDFromKey(t *testing.T) {
 	cases := map[string]string{
 		"github.com/team/project": "gh/team/project",
@@ -345,7 +391,7 @@ func TestSubmissionIDFromKey(t *testing.T) {
 }
 
 func TestTemplatesLoad(t *testing.T) {
-	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome} {
+	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome, templateSummary} {
 		body, err := loadTemplate(name)
 		if err != nil {
 			t.Fatalf("loadTemplate(%q): %v", name, err)

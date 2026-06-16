@@ -24,6 +24,7 @@ const (
 	templateAuthenticity = "authenticity"
 	templatePrompting    = "prompting"
 	templateOutcome      = "outcome"
+	templateSummary      = "summary"
 
 	// Composite weights. agent_leverage is descriptive and excluded.
 	weightAuthenticity = 0.30
@@ -77,6 +78,14 @@ type Metrics struct {
 
 	AgentHistogram map[string]int `json:"agent_histogram,omitempty"`
 	PrimaryAgent   string         `json:"primary_agent,omitempty"`
+
+	// Semantic (entire-sem) layer, present only when the brain was built with the
+	// sem provider. These describe what the team actually built (code structure),
+	// feeding the execution lens; zero/empty when the brain has no sem layer.
+	SemanticSymbols      int      `json:"semantic_symbols,omitempty"`
+	SemanticRelations    int      `json:"semantic_relations,omitempty"`
+	SemanticFiles        int      `json:"semantic_files,omitempty"`
+	SemanticCapabilities []string `json:"semantic_capabilities,omitempty"`
 }
 
 // LensResult is one lens's verdict on a submission. Score is a pointer so an
@@ -118,6 +127,7 @@ type RunReport struct {
 	Deterministic Metrics      `json:"deterministic"`
 	Composite     *float64     `json:"composite,omitempty"`
 	Flags         []string     `json:"flags,omitempty"`
+	Summary       string       `json:"summary,omitempty"`
 	Lenses        []LensResult `json:"lenses"`
 	Warnings      []string     `json:"warnings,omitempty"`
 }
@@ -148,7 +158,8 @@ type RankEntry struct {
 
 // RankExcluded records a submission held out of the ordered table by a hard gate.
 type RankExcluded struct {
-	SubmissionID string `json:"submission_id"`
-	BrainPath    string `json:"brain_path"`
-	Reason       string `json:"reason"`
+	SubmissionID string     `json:"submission_id"`
+	BrainPath    string     `json:"brain_path"`
+	Reason       string     `json:"reason"`
+	Report       *RunReport `json:"report,omitempty"`
 }

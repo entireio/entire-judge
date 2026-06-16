@@ -50,10 +50,26 @@ type SessionSource struct {
 	Sessions           []Session  `json:"sessions"`
 }
 
-// Sources is the brain's per-source manifest container. The judge only needs
-// the session source; other sources (seed, history, facts, docs) are ignored.
+// SemanticSource is the brain's optional entire-sem layer (built by
+// `entire brain refresh` when the sem provider is available). It records the
+// code-structure snapshot the judge can read to see what a team actually built.
+type SemanticSource struct {
+	GeneratedAt  time.Time `json:"generated_at"`
+	Provider     string    `json:"provider,omitempty"`
+	Commit       string    `json:"commit,omitempty"`
+	SnapshotPath string    `json:"snapshot_path,omitempty"`
+	Symbols      int       `json:"symbols"`
+	Relations    int       `json:"relations"`
+	Files        int       `json:"files,omitempty"`
+	Capabilities []string  `json:"capabilities,omitempty"`
+}
+
+// Sources is the brain's per-source manifest container. The judge needs the
+// session source and the optional semantic (entire-sem) source; other sources
+// (seed, history, facts, docs) are ignored.
 type Sources struct {
-	Sessions *SessionSource `json:"sessions,omitempty"`
+	Sessions *SessionSource  `json:"sessions,omitempty"`
+	Semantic *SemanticSource `json:"semantic,omitempty"`
 }
 
 // Manifest is the brain export manifest. The judge prefers the structured

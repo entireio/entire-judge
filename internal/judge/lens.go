@@ -40,6 +40,7 @@ type submissionContext struct {
 	Facts    []brainstore.FactRecord
 	Coverage *gitutil.HistoryCoverage
 	Metrics  Metrics
+	Semantic *brainstore.SemanticSummary
 
 	Brief string
 }
@@ -71,6 +72,10 @@ func buildBrief(sc submissionContext) string {
 		}
 	}
 
+	if sec := semanticSummarySection(sc.Semantic); sec != "" {
+		b.WriteString(sec)
+	}
+
 	excerpts := humanPromptExcerpts(sc, excerptMaxBytes)
 	if excerpts != "" {
 		b.WriteString("\n## Human prompts (session excerpts)\n\n")
@@ -82,6 +87,41 @@ func buildBrief(sc submissionContext) string {
 		out = truncateString(out, contextMaxBytes)
 	}
 	return out
+}
+
+// semanticSummarySection renders the entire-sem digest — what the team actually
+// built (symbol kinds, languages, busiest files, capabilities) — for the brief.
+// It is the structural ground truth the execution lens checks the plan against.
+// Returns "" when there is no sem layer.
+func semanticSummarySection(s *brainstore.SemanticSummary) string {
+	if s == nil || s.Symbols == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n## What was built (code structure from entire-sem)\n\n")
+	fmt.Fprintf(&b, "%d symbols, %d relations across %d files", s.Symbols, s.Relations, s.Files)
+	if len(s.Capabilities) > 0 {
+		fmt.Fprintf(&b, "; capabilities: %s", strings.Join(s.Capabilities, ", "))
+	}
+	b.WriteString("\n")
+	if labels := labelCountLine(s.ByKind); labels != "" {
+		fmt.Fprintf(&b, "symbol kinds: %s\n", labels)
+	}
+	if labels := labelCountLine(s.ByLanguage); labels != "" {
+		fmt.Fprintf(&b, "languages: %s\n", labels)
+	}
+	if labels := labelCountLine(s.TopFiles); labels != "" {
+		fmt.Fprintf(&b, "busiest files: %s\n", labels)
+	}
+	return b.String()
+}
+
+func labelCountLine(counts []brainstore.LabelCount) string {
+	parts := make([]string, 0, len(counts))
+	for _, c := range counts {
+		parts = append(parts, fmt.Sprintf("%s(%d)", c.Label, c.Count))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // timelineSummary renders the deterministic metrics as a compact factual summary

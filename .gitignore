@@ -1,2 +1,10 @@
 /entire-judge
 /dist/
+
+# Local agent/tooling workspace scaffolding — not part of the plugin
+/.regente/
+/.mcp.json
+/.codex/
+/.cursor/
+/.gemini/
+/.claude/

@@ -74,6 +74,7 @@ it informs the jury's judgment, it does not replace it.`,
 
 	cmd.CompletionOptions.DisableDefaultCmd = true
 
+	cmd.AddCommand(newAddCommand(opts))
 	cmd.AddCommand(newRunCommand(opts))
 	cmd.AddCommand(newRankCommand(opts))
 	cmd.AddCommand(newWatchCommand(opts))
@@ -111,6 +112,7 @@ type runFlags struct {
 	model     string
 	effort    string
 	startedAt string
+	theme     string
 	json      bool
 	plain     bool
 }
@@ -120,6 +122,7 @@ func registerRunFlags(cmd *cobra.Command, flags *runFlags) {
 	cmd.Flags().StringVar(&flags.model, "model", "", "Override the agent model for the LLM lenses")
 	cmd.Flags().StringVar(&flags.effort, "effort", "", "Override the reasoning effort for the LLM lenses (e.g. low)")
 	cmd.Flags().StringVar(&flags.startedAt, "started-at", "", "Hackathon start time (RFC3339); enables timeline placement")
+	cmd.Flags().StringVar(&flags.theme, "theme", "", "TUI color theme: default, catppuccin, gruvbox, tokyonight (or ENTIRE_JUDGE_THEME)")
 	cmd.Flags().BoolVar(&flags.json, "json", false, "Emit machine-readable JSON")
 	cmd.Flags().BoolVar(&flags.plain, "plain", false, "Emit the rendered text summary (never the TUI)")
 }

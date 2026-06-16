@@ -61,7 +61,7 @@ func runJudgeRun(cmd *cobra.Command, opts Options, flags runFlags, repoDir strin
 		printRunReport(cmd, report)
 		return nil
 	}
-	return runTUI(cmd, []judge.RunReport{*report}, report.Run)
+	return runTUI(cmd, []judge.RunReport{*report}, nil, resolveTheme(flags.theme), report.Run)
 }
 
 // ---- judge rank ----
@@ -85,6 +85,12 @@ func newRankCommand(opts Options) *cobra.Command {
 }
 
 func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) error {
+	// A saved board: when the path is a regular file, load the report and open
+	// the dashboard instantly — no re-scoring. This is the "score once, browse
+	// many times" path (`rank <dir> --json > board.json` then `watch board.json`).
+	if info, statErr := os.Stat(dir); statErr == nil && !info.IsDir() {
+		return openSavedBoard(cmd, flags, dir)
+	}
 	if err := agent.RejectForNoEgress(flags.agent); err != nil {
 		return err
 	}
@@ -123,7 +129,13 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 	}
 
 	var reports []judge.RunReport
-	for _, checkout := range checkouts {
+	var excludedReports []judge.RunReport
+	for i, checkout := range checkouts {
+		// Scoring runs the LLM lenses per submission before the dashboard opens,
+		// so emit progress to stderr — otherwise a multi-submission rank looks
+		// like a silent hang. (stderr keeps --json/--plain stdout clean, and the
+		// TUI's alt-screen clears these lines when it takes over.)
+		fmt.Fprintf(cmd.ErrOrStderr(), "scoring %d/%d: %s\n", i+1, len(checkouts), filepath.Base(checkout))
 		// Resolve each submission's brain exactly as `run` does, so the
 		// commit-timeline lens reads the real checkout (not a brain-dir parent).
 		storage := resolveBrainStorage(cmd.Context(), opts.Runner, opts.Env, checkout)
@@ -143,7 +155,9 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 				SubmissionID: sub.SubmissionID,
 				BrainPath:    sub.BrainPath,
 				Reason:       reason,
+				Report:       sub,
 			})
+			excludedReports = append(excludedReports, *sub)
 			continue
 		}
 		reports = append(reports, *sub)
@@ -177,7 +191,7 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 		printRankReport(cmd, report)
 		return nil
 	}
-	return runTUI(cmd, reports, report.Run)
+	return runTUI(cmd, reports, excludedReports, resolveTheme(flags.theme), report.Run)
 }
 
 // ---- judge watch ----
@@ -279,6 +293,8 @@ func printRunReport(cmd *cobra.Command, report *judge.RunReport) {
 	}
 	fmt.Fprintf(out, "  LLM: %s\n\n", report.Run.LLMStatus)
 
+	fmt.Fprintf(out, "Summary: %s\n\n", judge.SummaryText(report))
+
 	for _, lens := range report.Lenses {
 		fmt.Fprintf(out, "%s %s\n", tui.ScoreBar(lens.Score), lens.Lens)
 		if lens.Verdict != "" {
@@ -346,24 +362,71 @@ func truncateString(value string, max int) string {
 
 // runTUI launches the interactive submission browser. On a non-TTY it falls back
 // to the rendered text summary so the command is never silently inert.
-func runTUI(cmd *cobra.Command, reports []judge.RunReport, meta judge.RunMetadata) error {
+func runTUI(cmd *cobra.Command, ranked, excluded []judge.RunReport, theme tui.Theme, meta judge.RunMetadata) error {
 	if !commandOutputIsTTY(cmd) {
-		return fallbackText(cmd, reports)
+		return fallbackText(cmd, ranked, excluded)
 	}
-	model := tui.NewModel(reports, meta)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(cmd.OutOrStdout()))
+	model := tui.NewModel(ranked, excluded, theme, meta)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(cmd.OutOrStdout()))
 	_, err := program.Run()
 	return err
 }
 
-func fallbackText(cmd *cobra.Command, reports []judge.RunReport) error {
-	if len(reports) == 1 {
-		printRunReport(cmd, &reports[0])
+func fallbackText(cmd *cobra.Command, ranked, excluded []judge.RunReport) error {
+	all := append(append([]judge.RunReport(nil), ranked...), excluded...)
+	if len(all) == 1 {
+		printRunReport(cmd, &all[0])
 		return nil
 	}
-	for i := range reports {
-		printRunReport(cmd, &reports[i])
+	for i := range all {
+		printRunReport(cmd, &all[i])
 		fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 60))
 	}
 	return nil
+}
+
+// openSavedBoard loads a previously saved ranking (`rank --json > board.json`)
+// and opens the dashboard from it directly, with no re-scoring. It accepts a
+// saved ranking or a single saved submission report.
+func openSavedBoard(cmd *cobra.Command, flags runFlags, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read_saved_board: %w", err)
+	}
+
+	var rank judge.RankReport
+	if err := json.Unmarshal(data, &rank); err == nil && rank.Kind == "entire_judge_ranking" {
+		var ranked, excluded []judge.RunReport
+		for _, e := range rank.Submissions {
+			if e.Report != nil {
+				ranked = append(ranked, *e.Report)
+			}
+		}
+		for _, e := range rank.Excluded {
+			if e.Report != nil {
+				excluded = append(excluded, *e.Report)
+			}
+		}
+		if len(ranked) == 0 && len(excluded) == 0 {
+			return fmt.Errorf("saved_board_empty: %s has no embedded submission reports (re-run `rank --json` to regenerate)", path)
+		}
+		return runTUI(cmd, ranked, excluded, resolveTheme(flags.theme), rank.Run)
+	}
+
+	var single judge.RunReport
+	if err := json.Unmarshal(data, &single); err == nil && single.Kind == "entire_judge_submission" {
+		return runTUI(cmd, []judge.RunReport{single}, nil, resolveTheme(flags.theme), single.Run)
+	}
+	return fmt.Errorf("not_a_saved_board: %s is not a saved entire-judge report (expected `rank --json` or `run --json` output)", path)
+}
+
+// resolveTheme picks the TUI theme from the --theme flag, falling back to the
+// ENTIRE_JUDGE_THEME env var, then the default scheme.
+func resolveTheme(flagValue string) tui.Theme {
+	name := flagValue
+	if name == "" {
+		name = os.Getenv("ENTIRE_JUDGE_THEME")
+	}
+	theme, _ := tui.ThemeByName(name)
+	return theme
 }
