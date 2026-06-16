@@ -36,23 +36,33 @@ func newSubmissionTable(th Theme) table.Model {
 	return t
 }
 
+const rankColWidth = 4
+
 // submissionColumns lays out the columns for a given inner table width: a rank
-// number, a flexible submission id, a fixed score, and a one-glyph flag marker.
+// (centered, possibly a medal), a flexible submission id, a fixed score, and a
+// one-glyph flag marker.
 func submissionColumns(innerWidth int) []table.Column {
-	const rankW, scoreW, flagW = 3, 5, 1
+	const scoreW, flagW = 5, 1
 	// bubbles/table pads every column by 1 cell on each side, so 4 columns cost 8
 	// columns of padding on top of their widths; budget for that or the header
 	// wraps.
-	idW := innerWidth - rankW - scoreW - flagW - 8
+	idW := innerWidth - rankColWidth - scoreW - flagW - 8
 	if idW < 10 {
 		idW = 10
 	}
 	return []table.Column{
-		{Title: "#", Width: rankW},
+		{Title: centerCell("#"), Width: rankColWidth},
 		{Title: "Submission", Width: idW},
 		{Title: "Score", Width: scoreW},
 		{Title: "⚑", Width: flagW},
 	}
+}
+
+// centerCell centers content within the rank column. bubbles/table renders cells
+// left-aligned, so pre-centering to the exact column width is the only way to
+// center the column; it keeps medals (2-wide) and 1–2 digit ranks visually aligned.
+func centerCell(s string) string {
+	return lipgloss.PlaceHorizontal(rankColWidth, lipgloss.Center, s)
 }
 
 // submissionRows renders the reports for a section into table rows. The ranked
@@ -79,7 +89,7 @@ func submissionRows(reports []judge.RunReport, section int) []table.Row {
 		if len(r.Flags) > 0 {
 			flag = "⚑"
 		}
-		rows = append(rows, table.Row{rank, r.SubmissionID, score, flag})
+		rows = append(rows, table.Row{centerCell(rank), r.SubmissionID, score, flag})
 	}
 	return rows
 }

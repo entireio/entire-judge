@@ -86,7 +86,13 @@ func runJudgeAdd(cmd *cobra.Command, opts Options, flags addFlags, repoURL strin
 // host-provided ENTIRE_PLUGIN_DATA_DIR carries through) and overrides the repo
 // root and, when known, the plugin data dir.
 func buildSubmissionBrain(ctx context.Context, flags addFlags, repoDir, dataDir string) error {
+	// The host CLI exposes the builder as `entire brain refresh sessions`; the
+	// standalone brain binary exposes it directly as `entire-brain refresh
+	// sessions`. Detect which by the binary's base name so both work.
 	args := []string{"brain", "refresh", "sessions"}
+	if base := filepath.Base(flags.entireBinary); base == "entire-brain" || strings.HasPrefix(base, "entire-brain") {
+		args = []string{"refresh", "sessions"}
+	}
 	if flags.checkpointLimit > 0 {
 		args = append(args, "--checkpoint-limit", strconv.Itoa(flags.checkpointLimit))
 	}

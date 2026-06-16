@@ -61,7 +61,7 @@ func renderDetail(th Theme, r *judge.RunReport, meta judge.RunMetadata, excluded
 	}
 	b.WriteString(th.dimStyle().Render(truncate(meta1, width)))
 	b.WriteString("\n")
-	b.WriteString(th.dimStyle().Render("↑/↓ scroll · esc/← back"))
+	b.WriteString(th.dimStyle().Render("↑/↓ scroll · esc/← back · g GitHub · e entire.io"))
 	b.WriteString("\n\n")
 
 	if excluded {

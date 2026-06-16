@@ -8,6 +8,8 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -104,6 +106,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filtering = true
 			m.filter.Focus()
 			return m, textinput.Blink
+		case key.Matches(msg, m.keys.GitHub):
+			return m, m.openSelected("github")
+		case key.Matches(msg, m.keys.Entire):
+			return m, m.openSelected("entire")
 		case key.Matches(msg, m.keys.Section):
 			m.section = sectionRanked + sectionExcluded - m.section
 			m.focusDetail = false
@@ -228,6 +234,58 @@ func (m *Model) resize() {
 	m.filter.Width = m.leftInner - len(m.filter.Prompt) - 1
 	m.detailWidth = m.rightInner
 	m.refreshDetail()
+}
+
+// selectedReport returns the report under the cursor in the active section, or
+// nil when the section is empty.
+func (m Model) selectedReport() *judge.RunReport {
+	if len(m.visible) == 0 {
+		return nil
+	}
+	idx := m.table.Cursor()
+	if idx < 0 || idx >= len(m.visible) {
+		return nil
+	}
+	return &m.visible[idx]
+}
+
+// openSelected opens the selected submission's GitHub or entire.io page in the
+// browser via the OS opener. This is the reliable path: with mouse capture on,
+// terminals can't deliver plain clicks to the OSC 8 links, so the keybindings
+// (g / e) drive navigation regardless of terminal support.
+func (m Model) openSelected(which string) tea.Cmd {
+	r := m.selectedReport()
+	if r == nil {
+		return nil
+	}
+	owner, repo := ownerRepo(r.SubmissionID)
+	if owner == "" {
+		return nil
+	}
+	url := "https://entire.io/gh/" + owner + "/" + repo + "/commits"
+	if which == "github" {
+		url = "https://github.com/" + owner + "/" + repo
+	}
+	return openURLCmd(url)
+}
+
+// openURLCmd returns a command that opens url in the default browser without
+// blocking the UI. A failure is silent — the URL is also shown as an OSC 8 link.
+func openURLCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		var name string
+		var args []string
+		switch runtime.GOOS {
+		case "darwin":
+			name, args = "open", []string{url}
+		case "windows":
+			name, args = "rundll32", []string{"url.dll,FileProtocolHandler", url}
+		default:
+			name, args = "xdg-open", []string{url}
+		}
+		_ = exec.Command(name, args...).Start()
+		return nil
+	}
 }
 
 func (m *Model) source() []judge.RunReport {
