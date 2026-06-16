@@ -41,15 +41,20 @@ func sampleReport() *judge.RunReport {
 func TestSubmissionRows(t *testing.T) {
 	reports := []judge.RunReport{*sampleReport()}
 	ranked := submissionRows(reports, sectionRanked)
-	if len(ranked) != 1 || !strings.Contains(ranked[0][0], medal(1)) || ranked[0][2] != "4.75" {
-		t.Errorf("ranked row = %v, want gold medal / score 4.75", ranked[0])
+	// rank 1 -> centered digit "1" in the rank column, gold medal in the trailing
+	// mark column (medal wins over the flag for a top-3 submission).
+	if len(ranked) != 1 || !strings.Contains(ranked[0][0], "1") || ranked[0][2] != "4.75" {
+		t.Errorf("ranked row = %v, want rank 1 / score 4.75", ranked[0])
 	}
-	if ranked[0][3] != "⚑" {
-		t.Errorf("expected flag marker on a flagged submission, got %q", ranked[0][3])
+	if ranked[0][3] != medal(1) {
+		t.Errorf("expected gold medal in the mark column, got %q", ranked[0][3])
 	}
 	excl := submissionRows(reports, sectionExcluded)
 	if !strings.Contains(excl[0][0], "—") || excl[0][2] != "gate" {
 		t.Errorf("excluded row = %v, want dash rank / gate score", excl[0])
+	}
+	if excl[0][3] != "⚑" {
+		t.Errorf("expected flag marker on the excluded flagged submission, got %q", excl[0][3])
 	}
 }
 

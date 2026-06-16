@@ -39,14 +39,17 @@ func newSubmissionTable(th Theme) table.Model {
 const rankColWidth = 4
 
 // submissionColumns lays out the columns for a given inner table width: a rank
-// (centered, possibly a medal), a flexible submission id, a fixed score, and a
-// one-glyph flag marker.
+// number (centered), a flexible submission id, a fixed score, and a trailing
+// "mark" column for the medal / flag glyph. The medal lives in the LAST column on
+// purpose: emoji render at a terminal-dependent width, so keeping them out of the
+// inner columns means that variance can never misalign the rank/submission/score
+// columns — only the right edge.
 func submissionColumns(innerWidth int) []table.Column {
-	const scoreW, flagW = 5, 1
+	const scoreW, markW = 5, 2
 	// bubbles/table pads every column by 1 cell on each side, so 4 columns cost 8
 	// columns of padding on top of their widths; budget for that or the header
 	// wraps.
-	idW := innerWidth - rankColWidth - scoreW - flagW - 8
+	idW := innerWidth - rankColWidth - scoreW - markW - 8
 	if idW < 10 {
 		idW = 10
 	}
@@ -54,13 +57,14 @@ func submissionColumns(innerWidth int) []table.Column {
 		{Title: centerCell("#"), Width: rankColWidth},
 		{Title: "Submission", Width: idW},
 		{Title: "Score", Width: scoreW},
-		{Title: "⚑", Width: flagW},
+		{Title: "", Width: markW},
 	}
 }
 
 // centerCell centers content within the rank column. bubbles/table renders cells
 // left-aligned, so pre-centering to the exact column width is the only way to
-// center the column; it keeps medals (2-wide) and 1–2 digit ranks visually aligned.
+// center the column. Ranks are plain digits (width-stable), so 1–2 digit numbers
+// line up exactly.
 func centerCell(s string) string {
 	return lipgloss.PlaceHorizontal(rankColWidth, lipgloss.Center, s)
 }
@@ -74,22 +78,23 @@ func submissionRows(reports []judge.RunReport, section int) []table.Row {
 		r := reports[i]
 		rank := "—"
 		score := "—"
+		medalGlyph := ""
 		if section == sectionRanked {
 			rank = fmt.Sprintf("%d", i+1)
-			if m := medal(i + 1); m != "" { // gold/silver/bronze for the top 3
-				rank = m
-			}
+			medalGlyph = medal(i + 1) // gold/silver/bronze for the top 3
 			if r.Composite != nil {
 				score = fmt.Sprintf("%.2f", *r.Composite)
 			}
 		} else {
 			score = "gate"
 		}
-		flag := " "
-		if len(r.Flags) > 0 {
-			flag = "⚑"
+		// Trailing mark: medal for the top 3, else a flag marker. The medal wins
+		// for a flagged top-3 submission; the detail view lists the flags anyway.
+		mark := medalGlyph
+		if mark == "" && len(r.Flags) > 0 {
+			mark = "⚑"
 		}
-		rows = append(rows, table.Row{centerCell(rank), r.SubmissionID, score, flag})
+		rows = append(rows, table.Row{centerCell(rank), r.SubmissionID, score, mark})
 	}
 	return rows
 }
