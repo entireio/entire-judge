@@ -30,24 +30,65 @@ type repoStorage struct {
 	BrainDir string
 }
 
-// resolveBrainStorage resolves the brain directory for a repository. The repo key
-// is read from the brain manifest's repo_key field when a brain already exists at
-// the derived location; otherwise it is derived from the git origin remote
-// (gh/<owner>/<repo>), falling back to a local key. The brain dir is
-// <pluginDataDir>/repos/<repoKey>.
+// resolveBrainStorage resolves the brain directory for a repository. Brains are
+// authored by the `brain` plugin under its own data dir
+// (<plugins-data>/brain/repos/<repoKey>), which is a sibling of judge's data dir
+// (<plugins-data>/judge), so judge must look there rather than under its own
+// data dir. It also falls back to judge's own data dir for brains built by
+// `entire judge add`. The repo key is read from the brain manifest's repo_key
+// field when a brain already exists; otherwise it is derived from the git origin
+// remote (gh/<owner>/<repo>), falling back to a local key.
 func resolveBrainStorage(ctx context.Context, runner gitutil.CommandRunner, env EntireEnv, repoDir string) repoStorage {
 	key := deriveRepoKey(ctx, runner, repoDir)
-	brainDir := brainstore.BrainDir(env.PluginDataDir, key)
-	// Prefer the manifest's own repo_key when present so the on-disk key wins over
-	// a freshly derived one (they normally match; the manifest is authoritative).
-	if manifest, err := brainstore.LoadManifest(brainDir); err == nil && manifest.RepoKey != "" {
-		if manifest.RepoKey != key {
-			key = manifest.RepoKey
-			brainDir = brainstore.BrainDir(env.PluginDataDir, key)
+	candidates := brainDataDirs(env.PluginDataDir)
+	// The primary (brain plugin) location is what an unresolved error should
+	// point the user at — that's where `entire brain refresh` writes.
+	primary, _ := storageIn(candidates[0], key)
+	for _, dataDir := range candidates {
+		if st, ok := storageIn(dataDir, key); ok {
+			return st
 		}
 	}
-	return repoStorage{Key: key, BrainDir: brainDir}
+	return primary
 }
+
+// storageIn resolves the repo's brain dir under a single plugin data dir,
+// preferring the manifest's own repo_key when a brain exists there (the manifest
+// is authoritative). The bool reports whether a brain manifest was found.
+func storageIn(dataDir, key string) (repoStorage, bool) {
+	brainDir := brainstore.BrainDir(dataDir, key)
+	// LoadManifest tolerates a missing manifest (returns an empty one), so use
+	// Exists to decide whether a brain actually lives here.
+	if !brainstore.Exists(brainDir) {
+		return repoStorage{Key: key, BrainDir: brainDir}, false
+	}
+	if manifest, err := brainstore.LoadManifest(brainDir); err == nil && manifest.RepoKey != "" && manifest.RepoKey != key {
+		key = manifest.RepoKey
+		brainDir = brainstore.BrainDir(dataDir, key)
+	}
+	return repoStorage{Key: key, BrainDir: brainDir}, true
+}
+
+// brainDataDirs returns the plugin data dirs to search for a brain, most
+// authoritative first: the sibling `brain` plugin data dir (where
+// `entire brain refresh` writes), then judge's own data dir (where
+// `entire judge add` writes). The host sets ENTIRE_PLUGIN_DATA_DIR to judge's
+// dir (.../plugins/data/judge); the brain's is its sibling (.../plugins/data/brain).
+func brainDataDirs(pluginDataDir string) []string {
+	if pluginDataDir == "" {
+		return []string{""}
+	}
+	brainDir := pluginDataDir
+	if filepath.Base(pluginDataDir) != brainPluginDirName {
+		brainDir = filepath.Join(filepath.Dir(pluginDataDir), brainPluginDirName)
+	}
+	if brainDir == pluginDataDir {
+		return []string{pluginDataDir}
+	}
+	return []string{brainDir, pluginDataDir}
+}
+
+const brainPluginDirName = "brain"
 
 // deriveRepoKey produces a slash-joined storage key for a repository, preferring
 // gh/<owner>/<repo> derived from the origin remote and falling back to a local
