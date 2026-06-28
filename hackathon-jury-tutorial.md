@@ -263,35 +263,6 @@ Large submissions can take minutes to refresh, especially if they have thousands
 of checkpoints or many tracked source files. Build brains before live demos, then
 save `rank --json` once and browse the saved board.
 
-## Optional: Athens Sample Data
-
-The Athens hackathon submissions are useful for a setup smoke test before a new
-event. They are normal GitHub repos with Entire checkpoint refs:
-
-```sh
-ATHENS_REPOS=(
-  https://github.com/omincron/pricemind-mvp.git
-  https://github.com/entireio/cli.git
-  https://github.com/danielkotsi/pantryPal.git
-  https://github.com/nikolasgkou/gate-tpa.git
-  https://github.com/Manolisgeo/agentbuilder.git
-  https://github.com/galactica-labs/project-atlas.git
-  https://github.com/Cavramoudis/msquared.git
-  https://github.com/iraklisp98/NoteAI.git
-  https://github.com/socratesomiliadis/syntheci-shipping.git
-  https://github.com/Graffalo92/thalaios.git
-  https://github.com/itsmichellecotter-cmyk/corporate-twin.git
-)
-
-for repo_url in "${ATHENS_REPOS[@]}"; do
-  entire judge add "$repo_url" --dir "$SUBMISSIONS" --build=false
-done
-```
-
-Then run the normal brain build, preflight, and rank steps below. The
-`entireio/cli` sample is much larger than the others; use one smaller sample
-first if you only want a quick plugin smoke test.
-
 ## Preflight One Submission
 
 Before scoring the whole event, prove the full stack works on one repo:
