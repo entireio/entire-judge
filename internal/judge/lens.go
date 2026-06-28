@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -393,12 +395,18 @@ func validateLensEvidence(result *LensResult, sc submissionContext) {
 }
 
 // validateEvidenceAnchors filters an evidence list to anchors that resolve against
-// the brain: a commit hash that appears in the coverage, or a session id that
-// exists in the manifest. Unresolvable anchors are dropped (and reported).
+// the brain/repo: a commit hash that appears in the coverage, a session id or
+// session timestamp that exists in the manifest, or a safe repo-relative file
+// path from the submission. Unresolvable anchors are dropped (and reported).
 func validateEvidenceAnchors(sc submissionContext, evidence []string) (kept, dropped []string) {
 	sessionIDs := map[string]struct{}{}
+	sessionTimes := map[string]struct{}{}
 	for i := range sc.Sessions {
 		sessionIDs[strings.ToLower(sc.Sessions[i].SessionID)] = struct{}{}
+		if !sc.Sessions[i].CreatedAt.IsZero() {
+			sessionTimes[strings.ToLower(sc.Sessions[i].CreatedAt.UTC().Format(time.RFC3339))] = struct{}{}
+			sessionTimes[strings.ToLower(sc.Sessions[i].CreatedAt.UTC().Format(time.RFC3339Nano))] = struct{}{}
+		}
 	}
 	commitHashes := map[string]struct{}{}
 	if sc.Coverage != nil {
@@ -406,8 +414,9 @@ func validateEvidenceAnchors(sc submissionContext, evidence []string) (kept, dro
 			commitHashes[strings.ToLower(sc.Coverage.UncoveredCommits[i].Hash)] = struct{}{}
 		}
 	}
+	filePaths := knownEvidenceFiles(sc)
 	for _, anchor := range evidence {
-		if anchorResolves(anchor, sessionIDs, commitHashes) {
+		if anchorResolves(anchor, sessionIDs, sessionTimes, commitHashes, filePaths, sc.RepoDir) {
 			kept = append(kept, anchor)
 		} else {
 			dropped = append(dropped, anchor)
@@ -416,14 +425,53 @@ func validateEvidenceAnchors(sc submissionContext, evidence []string) (kept, dro
 	return kept, dropped
 }
 
+func knownEvidenceFiles(sc submissionContext) map[string]struct{} {
+	files := map[string]struct{}{}
+	for _, session := range sc.Sessions {
+		for _, file := range session.FilesTouched {
+			addEvidenceFile(files, file)
+		}
+	}
+	if sc.Semantic != nil {
+		for _, file := range sc.Semantic.TopFiles {
+			addEvidenceFile(files, file.Label)
+		}
+	}
+	return files
+}
+
+func addEvidenceFile(files map[string]struct{}, file string) {
+	if clean, ok := cleanRepoEvidencePath(file); ok {
+		files[strings.ToLower(clean)] = struct{}{}
+	}
+}
+
 // anchorResolves reports whether an evidence string references a known session id
-// or a known commit hash. It tokenizes the anchor so an anchor like "commit
-// abc1234: fixed the bug" still matches the bare hash, and matches a commit hash
-// by prefix (agents routinely cite short hashes).
-func anchorResolves(anchor string, sessionIDs, commitHashes map[string]struct{}) bool {
+// a known session timestamp, a known commit hash, or a safe repo-relative file.
+// It tokenizes the anchor so an anchor like "commit abc1234: fixed the bug" still
+// matches the bare hash, and matches a commit hash by prefix (agents routinely
+// cite short hashes).
+func anchorResolves(anchor string, sessionIDs, sessionTimes, commitHashes, filePaths map[string]struct{}, repoDir string) bool {
 	lower := strings.ToLower(anchor)
-	if _, ok := sessionIDs[strings.TrimSpace(lower)]; ok {
+	trimmed := strings.TrimSpace(lower)
+	if _, ok := sessionIDs[trimmed]; ok {
 		return true
+	}
+	if _, ok := sessionTimes[trimmed]; ok {
+		return true
+	}
+	for id := range sessionIDs {
+		if len(id) >= 7 && strings.Contains(lower, id) {
+			return true
+		}
+	}
+	if fileAnchorResolves(anchor, filePaths, repoDir) {
+		return true
+	}
+	for timestamp := range sessionTimes {
+		if strings.Contains(lower, timestamp) {
+			return true
+		}
 	}
 	for _, tok := range strings.FieldsFunc(lower, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
@@ -440,6 +488,35 @@ func anchorResolves(anchor string, sessionIDs, commitHashes map[string]struct{})
 		}
 	}
 	return false
+}
+
+func fileAnchorResolves(anchor string, filePaths map[string]struct{}, repoDir string) bool {
+	clean, ok := cleanRepoEvidencePath(anchor)
+	if !ok {
+		return false
+	}
+	if _, ok := filePaths[strings.ToLower(clean)]; ok {
+		return true
+	}
+	if repoDir == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(repoDir, filepath.FromSlash(clean)))
+	return err == nil && !info.IsDir()
+}
+
+func cleanRepoEvidencePath(anchor string) (string, bool) {
+	candidate := strings.TrimSpace(anchor)
+	candidate = strings.Trim(candidate, "`'\"")
+	candidate = strings.TrimPrefix(candidate, "file:")
+	if candidate == "" {
+		return "", false
+	}
+	clean := filepath.Clean(filepath.FromSlash(candidate))
+	if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(clean), true
 }
 
 // sortedAgentHistogram renders an agent histogram as a deterministic

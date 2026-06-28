@@ -138,6 +138,40 @@ entire judge rank --help
 The `entire sem doctor --json` output should include `"provider":"entire-sem"`
 and `"no_egress":true`.
 
+## Check The Judge Agent
+
+`entire judge` can always run the deterministic lenses, but the
+`prompting_skill`, `idea_plan_execution`, and generated `summary` fields need a
+judge agent. If you plan to use Claude Code, make sure the same terminal that
+runs `entire judge` can see a logged-in `claude` binary:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+claude --version
+claude --print --no-session-persistence \
+  --setting-sources user \
+  --strict-mcp-config \
+  --mcp-config '{"mcpServers":{}}' \
+  --disable-slash-commands \
+  --permission-mode dontAsk \
+  --tools '' \
+  --system-prompt 'Reply only with OK.' <<'EOF'
+hello
+EOF
+```
+
+The final line should be `OK`. If it says `Not logged in`, run `claude` once in
+that terminal and complete `/login`.
+
+For local-only judging, verify Ollama before the event:
+
+```sh
+ollama --version
+ollama list
+```
+
+Pick an installed coding or instruction model for the `--model` flag.
+
 Alternative Go install path, once the repositories are public and the jury
 machine has access to them:
 

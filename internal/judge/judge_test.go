@@ -203,24 +203,39 @@ func TestParseLensOutputLenient(t *testing.T) {
 }
 
 func TestValidateEvidenceAnchors(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, "docs", "plans"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "docs", "plans", "agent.md"), []byte("# plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	sc := submissionContext{
-		Sessions: []brainstore.Session{{SessionID: "sess-abc"}, {SessionID: "sess-def"}},
+		RepoDir: repoDir,
+		Sessions: []brainstore.Session{
+			{SessionID: "sess-abc", CreatedAt: time.Date(2026, 5, 28, 8, 19, 49, 0, time.UTC)},
+			{SessionID: "sess-def"},
+		},
 		Coverage: &gitutil.HistoryCoverage{
 			UncoveredCommits: []gitutil.Commit{{Hash: "abc1234deadbeef"}},
 		},
 	}
 	evidence := []string{
 		"sess-abc",                      // exact session id
+		"session_sess-def",              // session id with model-added prefix
+		"2026-05-28T08:19:49Z",          // exact session timestamp
 		"commit abc1234: fixed the bug", // commit short-hash prefix in prose
+		"docs/plans/agent.md",           // repo-relative file evidence
 		"sess-ghost",                    // unknown session
 		"totally made up reference",     // unresolvable
+		"../outside.md",                 // unsafe path
 	}
 	kept, dropped := validateEvidenceAnchors(sc, evidence)
-	if len(kept) != 2 {
-		t.Errorf("kept = %v, want 2 resolvable anchors", kept)
+	if len(kept) != 5 {
+		t.Errorf("kept = %v, want 5 resolvable anchors", kept)
 	}
-	if len(dropped) != 2 {
-		t.Errorf("dropped = %v, want 2 unresolvable anchors", dropped)
+	if len(dropped) != 3 {
+		t.Errorf("dropped = %v, want 3 unresolvable anchors", dropped)
 	}
 }
 
