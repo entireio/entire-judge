@@ -47,13 +47,14 @@ func TestBuildHistoryCoverageCoverageClasses(t *testing.T) {
 
 	data := record("pre0001", "", preAt, "pre-session work") +
 		record("cov0001", "", coveredAt, "exported work\n\nEntire-Checkpoint: aaaaaaaaaaaa") +
+		record("unx0001", "", coveredAt, "checkpointed but not exported\n\nEntire-Checkpoint: bbbbbbbbbbbb") +
 		record("mis0001", "", missingAt, "no checkpoint trailer")
 	runner := fakeRunner{gitLog: data}
 
 	exported := map[string]struct{}{"aaaaaaaaaaaa": {}}
 	cov := BuildHistoryCoverage(context.Background(), runner, "/repo", &oldest, exported)
-	if cov.TotalCommits != 3 {
-		t.Errorf("total = %d, want 3", cov.TotalCommits)
+	if cov.TotalCommits != 4 {
+		t.Errorf("total = %d, want 4", cov.TotalCommits)
 	}
 	if cov.PreSessionCommits != 1 {
 		t.Errorf("pre-session = %d, want 1", cov.PreSessionCommits)
@@ -61,11 +62,21 @@ func TestBuildHistoryCoverageCoverageClasses(t *testing.T) {
 	if cov.CoveredCommits != 1 {
 		t.Errorf("covered = %d, want 1", cov.CoveredCommits)
 	}
+	if cov.CheckpointedUnexportedCommits != 1 {
+		t.Errorf("checkpointed-unexported = %d, want 1", cov.CheckpointedUnexportedCommits)
+	}
 	if cov.MissingSessionCommits != 1 {
 		t.Errorf("missing-session = %d, want 1", cov.MissingSessionCommits)
 	}
 	if cov.ExportedCheckpoints != 1 {
 		t.Errorf("exported checkpoints = %d, want 1", cov.ExportedCheckpoints)
+	}
+	// The five coverage buckets must partition TotalCommits exactly (merges are an
+	// overlapping tally, not part of the partition).
+	sum := cov.PreSessionCommits + cov.CoveredCommits + cov.CheckpointedUnexportedCommits +
+		cov.MissingSessionCommits + cov.NoSessionHistoryCommits
+	if sum != cov.TotalCommits {
+		t.Errorf("coverage buckets sum to %d, want %d (must partition total)", sum, cov.TotalCommits)
 	}
 }
 

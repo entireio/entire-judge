@@ -162,8 +162,17 @@ func findingsBlock(th Theme, r *judge.RunReport, width int) string {
 		m.Sessions, m.Turns, m.HumanPrompts, m.FilesTouched, m.Facts))
 	metric("effort", fmt.Sprintf("%s on task · %d in / %d out tokens",
 		humanMinutes(m.TimeOnTaskMinutes), m.InputTokens, m.OutputTokens))
-	metric("commits", fmt.Sprintf("%d total · %d pre-session · %d covered · %d missing-session",
-		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.MissingSessionCommits))
+	// The five coverage buckets partition TotalCommits, so they reconcile to the
+	// total; merges are an overlapping tally, shown parenthetically.
+	commitsLine := fmt.Sprintf("%d total · %d pre-session · %d covered · %d checkpointed-unexported · %d missing-session",
+		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.CheckpointedUnexportedCommits, m.MissingSessionCommits)
+	if m.NoSessionHistory > 0 {
+		commitsLine += fmt.Sprintf(" · %d no-session-history", m.NoSessionHistory)
+	}
+	if m.MergeCommits > 0 {
+		commitsLine += fmt.Sprintf(" (%d merges)", m.MergeCommits)
+	}
+	metric("commits", commitsLine)
 	if m.FirstCommitAt != nil && m.FirstSessionAt != nil {
 		rel := "after"
 		if m.FirstCommitBeforeFirstSess {
