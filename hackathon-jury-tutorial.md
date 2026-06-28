@@ -393,6 +393,19 @@ entire judge rank "$SUBMISSIONS" \
   --json > "$REPORTS/board.json"
 ```
 
+Scoring is LLM-latency-bound, so `--jobs N` (default 4) scores N submissions
+concurrently and cuts wall-clock close to linearly — useful for a large field.
+Raise it if your agent's rate limits allow; the saved board is identical to a
+sequential run.
+
+```sh
+entire judge rank "$SUBMISSIONS" \
+  --started-at "$EVENT_START" \
+  --agent claude-code \
+  --jobs 4 \
+  --json > "$REPORTS/board.json"
+```
+
 Open the saved board in the interactive dashboard without re-scoring:
 
 ```sh
