@@ -10,12 +10,13 @@ import (
 	"github.com/suhaanthayyil/entire-judge/internal/judge"
 )
 
-// lensWeights are the composite weights, for display next to each scored lens.
-var lensWeights = map[string]string{
-	judge.LensAuthenticity: "30%",
-	judge.LensOutcome:      "30%",
-	judge.LensPrompting:    "20%",
-	judge.LensEffort:       "20%",
+// lensComponent labels which component grade each scored lens feeds (Grade A
+// process vs Grade B solution), shown next to the lens in the Score section.
+var lensComponent = map[string]string{
+	judge.LensAuthenticity: "A · process",
+	judge.LensPrompting:    "A · process",
+	judge.LensEffort:       "A · process",
+	judge.LensOutcome:      "B · solution",
 }
 
 // renderDetail renders one submission's page: Header, Score, Summary, Findings.
@@ -74,13 +75,28 @@ func renderDetail(th Theme, r *judge.RunReport, meta judge.RunMetadata, excluded
 		b.WriteString(wrap.Render(th.dimStyle().Render(reason)))
 		b.WriteString("\n\n")
 	} else {
-		composite := "n/a"
-		var color = th.Dim
-		if r.Composite != nil {
-			composite = fmt.Sprintf("%.2f / 5", *r.Composite)
-			color = th.scoreColor(*r.Composite)
+		// The two component grades and their combined total (process =
+		// authenticity+prompting+effort, solution = idea_plan_execution; combined =
+		// the equal-weighted mean). These are computed once when the report is built
+		// (or re-derived on load by the CLI) and read here, so the list and the
+		// detail page always show the same number.
+		process, solution, combined := r.GradeProcess, r.GradeSolution, r.Composite
+		gradeStr := func(g *float64) string {
+			if g == nil {
+				return "n/a"
+			}
+			return fmt.Sprintf("%.2f", *g)
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(color).Bold(true).Render("Composite  " + composite))
+		combColor := th.Dim
+		combVal := "n/a"
+		if combined != nil {
+			combVal = fmt.Sprintf("%.2f / 5", *combined)
+			combColor = th.scoreColor(*combined)
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(combColor).Bold(true).Render("Combined  " + combVal))
+		b.WriteString("\n")
+		b.WriteString(th.dimStyle().Render("Grade A · process  ") + gradeStr(process) +
+			th.dimStyle().Render("    Grade B · solution  ") + gradeStr(solution))
 		b.WriteString("\n\n")
 	}
 
@@ -89,12 +105,14 @@ func renderDetail(th Theme, r *judge.RunReport, meta judge.RunMetadata, excluded
 	b.WriteString("\n")
 	for i := range r.Lenses {
 		lens := r.Lenses[i]
-		label := lens.Lens
-		if w, ok := lensWeights[lens.Lens]; ok {
-			label += "  " + th.dimStyle().Render("("+w+")")
-		}
+		label := lens.Lens + "  " + th.dimStyle().Render("("+lensComponent[lens.Lens]+")")
 		if lens.Score != nil {
 			b.WriteString("  " + coloredScoreBar(th, lens.Score) + "  " + label + "\n")
+			// idea/plan/execution as their own indented sub-bars under the lens.
+			for _, c := range lens.Components {
+				cv := c.Score
+				b.WriteString("      " + coloredScoreBar(th, &cv) + "  " + th.dimStyle().Render(c.Name) + "\n")
+			}
 		} else {
 			// descriptive (agent_leverage)
 			desc := lens.Verdict

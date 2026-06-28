@@ -102,19 +102,26 @@ lenses.
   score.
 - **prompting_skill** — LLM-scored (0–5). How clearly and effectively the team
   directed their agent, read from the human-prompt excerpts.
-- **idea_plan_execution** — LLM-scored (0–5). The strength of the concept and how
-  coherently it was carried from intent to shipped work. When the brain carries an
-  **entire-sem** layer (see below), the brief includes a "What was built"
-  code-structure section so the lens can weigh what the team actually built
-  (symbol kinds, routes/tools/workflows, busiest files) against what they planned.
+- **idea_plan_execution** — LLM-scored as three sub-scores — **idea**, **plan**,
+  and **execution** (each 0–5, fractional) — averaged into the lens score, so close
+  submissions separate instead of clustering on one integer. When the brain carries
+  an **entire-sem** layer (see below), the brief includes a "What was built"
+  code-structure section so the `execution` sub-score weighs what the team actually
+  built (symbol kinds, routes/tools/workflows, busiest files) against what they
+  planned. The sub-scores are emitted as the lens `components` array.
 - **effort_consistency** — deterministic. Rewards sustained, multi-session work
   over a single burst.
 - **agent_leverage** — descriptive (unscored). Which agents the team leaned on.
 
-The composite weights authenticity (0.30), idea/plan/execution (0.30),
-prompting_skill (0.20), and effort_consistency (0.20); `agent_leverage` is
-descriptive and excluded. A missing LLM lens is renormalized out of the composite
-rather than deflating it.
+The headline score is built like a multi-component score (technical + presentation
+in judged sports): two component grades, each 0–5, then their equal-weighted mean.
+**Grade A (process)** is the mean of the supported process lenses — `authenticity`,
+`prompting_skill`, and `effort_consistency`. **Grade B (solution)** is the
+`idea_plan_execution` lens. The **composite** is the equal-weighted mean of
+whichever of {Grade A, Grade B} are present — so a submission scored with no judge
+agent still gets a Combined equal to its Process grade. A lens with no resolvable
+evidence is dropped from its grade rather than counted as zero; `agent_leverage` is
+descriptive and never scored.
 
 ### Summary
 
@@ -129,7 +136,8 @@ lens verdicts, so the summary is never blank.
 The deterministic block always computes. LLM lenses **degrade gracefully** — when
 the agent is unavailable, the lens is marked `supported: false` with a warning and
 the deterministic lenses are unaffected. Every LLM evidence anchor is validated
-against the brain (a real session id or commit hash); unresolvable anchors are
+against the brain (a real session id, session timestamp, commit hash, or a
+repo-relative file path present in the submission); unresolvable anchors are
 dropped, and a lens with zero valid anchors is excluded from the composite.
 
 ### Ranking
@@ -149,18 +157,24 @@ off-host); use `--agent ollama`, which is pinned to a loopback-only endpoint.
 
 ## Output
 
-- `--json` emits the machine-readable report (per-submission or ranking).
-- `--plain` emits a rendered text summary with score bars (and the summary line).
+- `--json` emits the machine-readable report (per-submission or ranking),
+  including each lens's `components` (the outcome lens's idea/plan/execution
+  sub-scores) and the `grade_process` / `grade_solution` / `composite` totals.
+- `--plain` emits a rendered text summary with score bars (and the summary line);
+  the per-submission report shows Grade A / Grade B / Combined and the outcome
+  lens's idea/plan/execution sub-scores.
 - Without either, on a TTY the `run`/`rank`/`watch` commands open the interactive
   **dashboard**; on a non-TTY they fall back to the rendered text summary.
 
 ### Dashboard
 
 The dashboard is a sidebar + detail layout: a ranked submission table on the left
-and a per-repo **page** on the right with three sections — **Score** (per-lens
-bars + composite), **Summary**, and **Findings** (the deterministic metrics plus
-each lens's bullets and evidence anchors). Hard-gated submissions live in a
-separate **Excluded** tab so the jury sees them with their gate reason.
+and a per-repo **page** on the right with three sections — **Score** (the
+**Combined** total with its **Grade A / Grade B** components and per-lens bars,
+including the outcome lens's idea/plan/execution sub-scores), **Summary**, and
+**Findings** (the deterministic metrics plus each lens's bullets and evidence
+anchors). Hard-gated submissions live in a separate **Excluded** tab so the jury
+sees them with their gate reason.
 
 - Navigate: `↑/↓` or `j/k` move the selection (the page follows); `enter`/`→`
   focuses the page to scroll it; `esc`/`←` returns to the list.
@@ -192,7 +206,7 @@ ENTIRE_PLUGIN_DATA_DIR=/path/to/plugin/data \
 ```text
 Submission: gh/example/project
 Brain: /path/to/plugin/data/repos/gh/example/project
-Composite: 4.70/5
+Combined: 4.75/5  (Grade A process 4.75 · Grade B solution n/a)
 Flags: idea_plan_execution_unscored, prompting_skill_unscored
 Agent: codex  LLM: degraded: 2 lens(es) had no LLM output
 

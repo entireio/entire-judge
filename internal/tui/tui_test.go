@@ -18,10 +18,14 @@ func sampleReport() *judge.RunReport {
 	return &judge.RunReport{
 		SubmissionID: "gh/team/syntheci-shipping",
 		RepoDir:      "/tmp/team/syntheci",
-		Composite:    score(4.75),
-		Summary:      "A maritime-intelligence platform built clean from data to demo.",
-		Flags:        []string{"prompting_skill_unsupported"},
-		Run:          judge.RunMetadata{Agent: "claude-code", LLMStatus: "ok"},
+		// Combined = mean(Grade A, Grade B); Grade A = mean(authenticity 4.5,
+		// effort 5) since prompting is unsupported; Grade B = outcome 4.8333.
+		Composite:     score((4.75 + 14.5/3.0) / 2.0),
+		GradeProcess:  score(4.75),
+		GradeSolution: score(14.5 / 3.0),
+		Summary:       "A maritime-intelligence platform built clean from data to demo.",
+		Flags:         []string{"prompting_skill_unsupported"},
+		Run:           judge.RunMetadata{Agent: "claude-code", LLMStatus: "ok"},
 		Deterministic: judge.Metrics{
 			TimelineCategory: judge.TimelineCleanStart,
 			TimelineReason:   "all sessions after start",
@@ -32,7 +36,10 @@ func sampleReport() *judge.RunReport {
 			PrimaryAgent:     "Codex",
 		},
 		Lenses: []judge.LensResult{
-			{Lens: judge.LensOutcome, Score: score(5), Verdict: "Coherent platform.", Bullets: []string{"Built RAG"}, Evidence: []string{"abc1234"}, Supported: true},
+			{Lens: judge.LensAuthenticity, Score: score(4.5), Verdict: "Clean start.", Supported: true},
+			{Lens: judge.LensPrompting, Score: score(4), Verdict: "Decent prompts.", Supported: false},
+			{Lens: judge.LensEffort, Score: score(5), Verdict: "Sustained effort.", Supported: true},
+			{Lens: judge.LensOutcome, Score: score(14.5 / 3.0), Components: []judge.LensComponent{{Name: "idea", Score: 5}, {Name: "plan", Score: 4.5}, {Name: "execution", Score: 5}}, Verdict: "Coherent platform.", Bullets: []string{"Built RAG"}, Evidence: []string{"abc1234"}, Supported: true},
 			{Lens: judge.LensAgent, Verdict: "Primary agent: Codex."},
 		},
 	}
@@ -43,8 +50,8 @@ func TestSubmissionRows(t *testing.T) {
 	ranked := submissionRows(reports, sectionRanked)
 	// rank 1 -> centered digit "1" in the rank column, gold medal in the trailing
 	// mark column (medal wins over the flag for a top-3 submission).
-	if len(ranked) != 1 || !strings.Contains(ranked[0][0], "1") || ranked[0][2] != "4.75" {
-		t.Errorf("ranked row = %v, want rank 1 / score 4.75", ranked[0])
+	if len(ranked) != 1 || !strings.Contains(ranked[0][0], "1") || ranked[0][2] != "4.79" {
+		t.Errorf("ranked row = %v, want rank 1 / score 4.79", ranked[0])
 	}
 	if ranked[0][3] != medal(1) {
 		t.Errorf("expected gold medal in the mark column, got %q", ranked[0][3])
@@ -83,10 +90,14 @@ func TestThemeByName(t *testing.T) {
 func TestRenderDetailSectionsAndSummary(t *testing.T) {
 	th, _ := ThemeByName("default")
 	out := renderDetail(th, sampleReport(), judge.RunMetadata{Agent: "claude-code"}, false, 1, 80)
-	for _, want := range []string{"Score", "Summary", "Findings", "gh/team/syntheci-shipping", "maritime-intelligence", "Codex×14", "Built RAG"} {
+	for _, want := range []string{"Score", "Summary", "Findings", "Combined", "Grade A", "Grade B", "gh/team/syntheci-shipping", "maritime-intelligence", "Codex×14", "Built RAG", "idea", "plan", "execution", "4.5", "4.75", "4.83"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderDetail missing %q", want)
 		}
+	}
+	// Process lenses (incl. effort_consistency) render above the solution lens.
+	if eff, idea := strings.Index(out, "effort_consistency"), strings.Index(out, "idea_plan_execution"); eff < 0 || idea < 0 || eff > idea {
+		t.Errorf("effort_consistency (%d) should render above idea_plan_execution (%d)", eff, idea)
 	}
 }
 

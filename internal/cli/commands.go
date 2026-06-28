@@ -225,6 +225,16 @@ func compositeOf(r judge.RunReport) float64 {
 	return *r.Composite
 }
 
+// applyGrades recomputes each report's component grades and combined composite
+// from its saved lens scores, so a board written by an older build renders with
+// the current scoring rules (combined = mean of the two component grades).
+func applyGrades(reports []judge.RunReport) {
+	for i := range reports {
+		judge.OrderLenses(reports[i].Lenses)
+		reports[i].GradeProcess, reports[i].GradeSolution, reports[i].Composite = judge.Grades(reports[i].Lenses)
+	}
+}
+
 // isGitCheckout reports whether dir is a git working tree (a .git directory or,
 // for worktrees/submodules, a .git file).
 func isGitCheckout(dir string) bool {
@@ -279,10 +289,16 @@ func printRunReport(cmd *cobra.Command, report *judge.RunReport) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Submission: %s\n", report.SubmissionID)
 	fmt.Fprintf(out, "Brain: %s\n", report.BrainPath)
+	g := func(v *float64) string {
+		if v == nil {
+			return "n/a"
+		}
+		return fmt.Sprintf("%.2f", *v)
+	}
 	if report.Composite != nil {
-		fmt.Fprintf(out, "Composite: %.2f/5\n", *report.Composite)
+		fmt.Fprintf(out, "Combined: %.2f/5  (Grade A process %s · Grade B solution %s)\n", *report.Composite, g(report.GradeProcess), g(report.GradeSolution))
 	} else {
-		fmt.Fprintf(out, "Composite: n/a\n")
+		fmt.Fprintf(out, "Combined: n/a\n")
 	}
 	if len(report.Flags) > 0 {
 		fmt.Fprintf(out, "Flags: %s\n", strings.Join(report.Flags, ", "))
@@ -297,6 +313,12 @@ func printRunReport(cmd *cobra.Command, report *judge.RunReport) {
 
 	for _, lens := range report.Lenses {
 		fmt.Fprintf(out, "%s %s\n", tui.ScoreBar(lens.Score), lens.Lens)
+		// idea/plan/execution render as their own indented score bars under the
+		// outcome lens.
+		for _, c := range lens.Components {
+			cs := c.Score
+			fmt.Fprintf(out, "    %s %s\n", tui.ScoreBar(&cs), c.Name)
+		}
 		if lens.Verdict != "" {
 			fmt.Fprintf(out, "  %s\n", lens.Verdict)
 		}
@@ -320,13 +342,19 @@ func printRunReport(cmd *cobra.Command, report *judge.RunReport) {
 func printRankReport(cmd *cobra.Command, report *judge.RankReport) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Ranking %d submission(s)\n\n", len(report.Submissions))
-	fmt.Fprintf(out, "%-4s %-32s %-10s %s\n", "rank", "submission", "composite", "flags")
-	for _, entry := range report.Submissions {
-		composite := "n/a"
-		if entry.Composite != nil {
-			composite = fmt.Sprintf("%.2f", *entry.Composite)
+	fmt.Fprintf(out, "%-4s %-32s %-6s %-6s %-9s %s\n", "rank", "submission", "A", "B", "combined", "flags")
+	g := func(v *float64) string {
+		if v == nil {
+			return "n/a"
 		}
-		fmt.Fprintf(out, "%-4d %-32s %-10s %s\n", entry.Rank, truncateString(entry.SubmissionID, 32), composite, strings.Join(entry.Flags, ","))
+		return fmt.Sprintf("%.2f", *v)
+	}
+	for _, entry := range report.Submissions {
+		a, b := "n/a", "n/a"
+		if entry.Report != nil {
+			a, b = g(entry.Report.GradeProcess), g(entry.Report.GradeSolution)
+		}
+		fmt.Fprintf(out, "%-4d %-32s %-6s %-6s %-9s %s\n", entry.Rank, truncateString(entry.SubmissionID, 32), a, b, g(entry.Composite), strings.Join(entry.Flags, ","))
 	}
 	if len(report.Excluded) > 0 {
 		fmt.Fprintf(out, "\nExcluded (hard gate):\n")
@@ -410,11 +438,18 @@ func openSavedBoard(cmd *cobra.Command, flags runFlags, path string) error {
 		if len(ranked) == 0 && len(excluded) == 0 {
 			return fmt.Errorf("saved_board_empty: %s has no embedded submission reports (re-run `rank --json` to regenerate)", path)
 		}
+		// Re-derive the grades from the saved lens scores and re-sort, so a board
+		// saved by an older build renders with the current scoring (combined =
+		// mean of the two component grades) rather than a stale composite.
+		applyGrades(ranked)
+		applyGrades(excluded)
+		sort.SliceStable(ranked, func(i, j int) bool { return compositeOf(ranked[i]) > compositeOf(ranked[j]) })
 		return runTUI(cmd, ranked, excluded, resolveTheme(flags.theme), rank.Run)
 	}
 
 	var single judge.RunReport
 	if err := json.Unmarshal(data, &single); err == nil && single.Kind == "entire_judge_submission" {
+		single.GradeProcess, single.GradeSolution, single.Composite = judge.Grades(single.Lenses)
 		return runTUI(cmd, []judge.RunReport{single}, nil, resolveTheme(flags.theme), single.Run)
 	}
 	return fmt.Errorf("not_a_saved_board: %s is not a saved entire-judge report (expected `rank --json` or `run --json` output)", path)

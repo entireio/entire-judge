@@ -62,3 +62,63 @@ func TestOpenSavedBoardLoadsRanking(t *testing.T) {
 		t.Errorf("expected not_a_saved_board error, got %v", err)
 	}
 }
+
+// TestOpenSavedBoardRegradesAndResorts proves a board saved by an older build
+// (stale per-row composites) re-renders under the current model: grades are
+// recomputed from the stored lens scores and the table is re-sorted by the
+// recomputed combined, not the stale stored composite.
+func TestOpenSavedBoardRegradesAndResorts(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	mk := func(id string, auth, eff, outcome float64) judge.RunReport {
+		return judge.RunReport{
+			SchemaVersion: 1,
+			Kind:          "entire_judge_submission",
+			SubmissionID:  id,
+			Composite:     s(0), // deliberately stale; must be recomputed from lenses
+			Lenses: []judge.LensResult{
+				{Lens: judge.LensAuthenticity, Score: s(auth), Supported: true},
+				{Lens: judge.LensEffort, Score: s(eff), Supported: true},
+				{Lens: judge.LensOutcome, Score: s(outcome), Supported: true},
+			},
+		}
+	}
+	low := mk("gh/team/low", 2, 2, 2)   // recomputed combined 2.0
+	high := mk("gh/team/high", 5, 5, 5) // recomputed combined 5.0
+	// Saved in the WRONG order (low first) with stale composites that would, if
+	// trusted, keep low on top.
+	board := judge.RankReport{
+		SchemaVersion: 1,
+		Kind:          "entire_judge_ranking",
+		Submissions: []judge.RankEntry{
+			{Rank: 1, SubmissionID: "gh/team/low", Composite: s(9.9), Report: &low},
+			{Rank: 2, SubmissionID: "gh/team/high", Composite: s(0.1), Report: &high},
+		},
+	}
+	data, err := json.MarshalIndent(board, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "board.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	cmd := NewRootCommand(Options{Version: "t", Runner: fakeRunner{}})
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"watch", path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("watch saved board: %v", err)
+	}
+	out := buf.String()
+	hi, lo := strings.Index(out, "gh/team/high"), strings.Index(out, "gh/team/low")
+	if hi < 0 || lo < 0 || hi > lo {
+		t.Errorf("expected high (idx %d) re-sorted above low (idx %d) by recomputed combined\n%s", hi, lo, out)
+	}
+	// The recomputed Combined (5.00), not the stale stored 0.1, is shown for high.
+	if !strings.Contains(out, "Combined: 5.00/5") {
+		t.Errorf("expected recomputed Combined 5.00 for high, got:\n%s", out)
+	}
+}

@@ -417,18 +417,45 @@ Useful dashboard keys:
 The board is advisory. It helps the jury inspect evidence faster; it does not
 replace human judgment.
 
-The main lenses are:
+### Two component grades and a combined total
 
-- `authenticity`: deterministic timeline classification using `--started-at`
-- `prompting_skill`: LLM-scored from human prompt excerpts
-- `idea_plan_execution`: LLM-scored; stronger when the brain has `entire-sem`
-  semantic context showing what was actually built
-- `effort_consistency`: deterministic session/turn/file activity metrics
-- `agent_leverage`: descriptive, not included in the composite score
+The headline score is built like a multi-component score (think technical +
+presentation in judged sports): two component grades, each 0–5, then their
+equal-weighted mean as the **Combined** total that orders the board.
 
-Submissions can be hard-gated into the Excluded tab if they predate the event,
-lack session history, or have an insufficient brain. Excluded submissions should
-still be reviewed by jurors, but they are not averaged into the ordered ranking.
+- **Grade A — Process** (how they worked): the mean of the supported process
+  lenses — `authenticity`, `prompting_skill`, and `effort_consistency`. (A lens
+  with no resolvable evidence is dropped from the mean, not counted as zero.)
+- **Grade B — Solution** (what they built): the `idea_plan_execution` lens.
+- **Combined** = the equal-weighted mean of whichever grades are present; if no
+  judge agent is available (no-egress or the agent is down), Grade B (Solution) is
+  `n/a` and Combined falls back to the Process grade alone. This is the `composite`
+  field in `--json`, the `Score` column in the dashboard list, and the `Combined`
+  line on each detail page (which also shows Grade A and Grade B).
+
+The lenses behind the grades:
+
+- `authenticity` (Process): deterministic timeline classification using
+  `--started-at`.
+- `prompting_skill` (Process): LLM-scored from human prompt excerpts.
+- `effort_consistency` (Process): deterministic session/turn/file activity.
+- `idea_plan_execution` (Solution): LLM-scored as three sub-scores — `idea`,
+  `plan`, and `execution` — averaged into the lens score. Three fractional
+  sub-components (each 0–5) instead of one whole number let close submissions
+  separate rather than clustering on the same integer. The `execution` sub-score
+  weighs the `entire-sem` semantic layer ("what was built") heavily. The
+  sub-scores appear under the lens on the detail page, in `judge run --plain`, and
+  as the lens `components` array in `--json`.
+- `agent_leverage`: descriptive, not scored and not part of any grade.
+
+### Excluded submissions
+
+A submission is hard-gated into the **Excluded** tab — and kept off the ordered
+board entirely — when its timeline predates the event, has no session history, or
+the brain is insufficient (e.g. a team that did not set up Entire correctly). Its
+lens scores, including the LLM solution grade computed from its code, are still
+recorded and viewable on its detail page, but it is not ranked and not averaged
+into the ordering. Jurors should still review excluded entries by hand.
 
 ## Recommended Event Workflow
 

@@ -96,7 +96,9 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 		report.Summary = ComposeSummary(report)
 	}
 
+	OrderLenses(report.Lenses)
 	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics)
+	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses)
 	return report, nil
 }
 

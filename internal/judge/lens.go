@@ -255,24 +255,42 @@ func runLens(ctx context.Context, sc submissionContext, lensName, templateName, 
 		result.Warnings = append(result.Warnings, fmt.Sprintf("lens agent failed: %v", err))
 		return result, nil
 	}
-	parsed := parseLensOutput(out)
+	parsed := parseLensOutput(out, lensName)
 	parsed.Lens = lensName
 	return parsed, nil
 }
 
-// lensRaw is the on-the-wire shape a lens agent is asked to emit.
+// lensRaw is the on-the-wire shape a lens agent is asked to emit. A lens may emit
+// a single overall `score`, or a set of named sub-scores (idea/plan/execution for
+// the outcome lens) whose mean becomes the overall score.
 type lensRaw struct {
-	Score    *float64 `json:"score"`
-	Verdict  string   `json:"verdict"`
-	Bullets  []string `json:"bullets"`
-	Evidence []string `json:"evidence"`
+	Score     *float64 `json:"score"`
+	Idea      *float64 `json:"idea"`
+	Plan      *float64 `json:"plan"`
+	Execution *float64 `json:"execution"`
+	Verdict   string   `json:"verdict"`
+	Bullets   []string `json:"bullets"`
+	Evidence  []string `json:"evidence"`
+}
+
+// clampScore confines a lens score to the 0-5 range.
+func clampScore(s float64) float64 {
+	if s < 0 {
+		return 0
+	}
+	if s > 5 {
+		return 5
+	}
+	return s
 }
 
 // parseLensOutput is the LENIENT parser for a lens agent's stdout. It strips
 // ```json fences, extracts the outer {...} object, unmarshals it, clamps the
 // score to 0-5, and dedupes bullets. On any failure it returns a result carrying
-// a warning and the raw output — it never hard-fails.
-func parseLensOutput(out string) LensResult {
+// a warning and the raw output — it never hard-fails. lensName selects the
+// scoring shape: the outcome lens averages idea/plan/execution sub-scores; the
+// others use a single `score`.
+func parseLensOutput(out, lensName string) LensResult {
 	result := LensResult{Raw: out}
 	jsonText, ok := extractOuterJSONObject(stripJSONFences(out))
 	if !ok {
@@ -284,15 +302,39 @@ func parseLensOutput(out string) LensResult {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("lens output not valid JSON: %v", err))
 		return result
 	}
-	if raw.Score != nil {
-		s := *raw.Score
-		if s < 0 {
-			s = 0
+	// Sub-scores (idea/plan/execution) apply only to the outcome lens: when present
+	// the overall score is their mean and each is recorded as a component, keeping
+	// the outcome grade fractional and showing the jury what drove it. Other lenses
+	// use the single `score` (and any stray sub-score keys are ignored).
+	if lensName == LensOutcome {
+		subs := []struct {
+			name string
+			val  *float64
+		}{{"idea", raw.Idea}, {"plan", raw.Plan}, {"execution", raw.Execution}}
+		var sum float64
+		var n int
+		for _, s := range subs {
+			if s.val == nil {
+				continue
+			}
+			v := clampScore(*s.val)
+			result.Components = append(result.Components, LensComponent{Name: s.name, Score: v})
+			sum += v
+			n++
 		}
-		if s > 5 {
-			s = 5
+		if n > 0 {
+			mean := sum / float64(n)
+			result.Score = &mean
 		}
+	}
+	if result.Score == nil && raw.Score != nil {
+		s := clampScore(*raw.Score)
 		result.Score = &s
+	}
+	// A scored LLM lens that parsed but produced no usable score is surfaced as a
+	// warning so the run is marked degraded rather than silently unscored.
+	if result.Score == nil && (lensName == LensOutcome || lensName == LensPrompting) {
+		result.Warnings = append(result.Warnings, "lens output contained no usable score")
 	}
 	result.Verdict = strings.TrimSpace(raw.Verdict)
 	result.Bullets = dedupeStrings(raw.Bullets)

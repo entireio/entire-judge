@@ -168,34 +168,67 @@ func TestClassifyTimeline(t *testing.T) {
 }
 
 func TestParseLensOutputLenient(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
 	cases := []struct {
 		name       string
+		lens       string
 		input      string
 		wantNil    bool
+		wantScore  *float64
+		wantComps  int
 		wantBullet int
 		wantWarn   bool
 	}{
-		{name: "clean json", input: `{"score":4,"verdict":"good","bullets":["a","b"],"evidence":["s1"]}`, wantBullet: 2},
-		{name: "fenced json", input: "```json\n{\"score\":3,\"verdict\":\"ok\",\"bullets\":[\"x\"],\"evidence\":[]}\n```", wantBullet: 1},
-		{name: "prose wrapped", input: "Here is my verdict:\n{\"score\":5,\"verdict\":\"great\",\"bullets\":[\"y\",\"y\"],\"evidence\":[\"abc\"]}\nThanks!", wantBullet: 1},
-		{name: "garbage", input: "I could not produce JSON, sorry.", wantNil: true, wantWarn: true},
-		{name: "score clamped above 5", input: `{"score":9,"verdict":"v","bullets":[],"evidence":[]}`},
+		// single-score lenses
+		{name: "clean json", lens: LensPrompting, input: `{"score":4,"verdict":"good","bullets":["a","b"],"evidence":["s1"]}`, wantScore: f(4), wantBullet: 2},
+		{name: "fenced json", lens: LensPrompting, input: "```json\n{\"score\":3,\"verdict\":\"ok\",\"bullets\":[\"x\"],\"evidence\":[]}\n```", wantScore: f(3), wantBullet: 1},
+		{name: "prose wrapped", lens: LensPrompting, input: "Here is my verdict:\n{\"score\":5,\"verdict\":\"great\",\"bullets\":[\"y\",\"y\"],\"evidence\":[\"abc\"]}\nThanks!", wantScore: f(5), wantBullet: 1},
+		{name: "garbage", lens: LensPrompting, input: "I could not produce JSON, sorry.", wantNil: true, wantWarn: true},
+		{name: "score clamped above 5", lens: LensPrompting, input: `{"score":9,"verdict":"v","bullets":[],"evidence":[]}`, wantScore: f(5)},
+		// outcome lens: idea/plan/execution averaged into the score
+		{name: "outcome mean of three", lens: LensOutcome, input: `{"idea":5,"plan":4,"execution":3,"verdict":"v","bullets":[],"evidence":[]}`, wantScore: f(4), wantComps: 3},
+		{name: "outcome fractional mean", lens: LensOutcome, input: `{"idea":5,"plan":4,"execution":4}`, wantScore: f(13.0 / 3.0), wantComps: 3},
+		{name: "outcome clamp before mean", lens: LensOutcome, input: `{"idea":9,"plan":-2,"execution":3}`, wantScore: f(8.0 / 3.0), wantComps: 3},
+		{name: "outcome partial subs", lens: LensOutcome, input: `{"idea":4,"execution":2}`, wantScore: f(3), wantComps: 2},
+		{name: "outcome single sub", lens: LensOutcome, input: `{"idea":4}`, wantScore: f(4), wantComps: 1},
+		{name: "outcome subs win over score", lens: LensOutcome, input: `{"score":1,"idea":5,"plan":5,"execution":5}`, wantScore: f(5), wantComps: 3},
+		{name: "outcome no score no subs", lens: LensOutcome, input: `{"verdict":"x","bullets":["a"]}`, wantNil: true, wantBullet: 1, wantWarn: true},
+		{name: "non-outcome ignores stray subs", lens: LensPrompting, input: `{"score":4,"idea":1,"plan":1,"execution":1}`, wantScore: f(4), wantComps: 0},
+		// a non-scored lens (authenticity/effort/agent) must NOT get the no-score warning
+		{name: "non-scored lens gets no warning", lens: LensAuthenticity, input: `{"verdict":"x","bullets":["a"]}`, wantNil: true, wantBullet: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := parseLensOutput(tc.input)
+			result := parseLensOutput(tc.input, tc.lens)
 			if tc.wantNil && result.Score != nil {
 				t.Errorf("expected nil score, got %v", *result.Score)
+			}
+			if !tc.wantNil && tc.wantScore != nil {
+				if result.Score == nil {
+					t.Fatalf("expected score %.4f, got nil", *tc.wantScore)
+				}
+				if diff := *result.Score - *tc.wantScore; diff > 1e-9 || diff < -1e-9 {
+					t.Errorf("score = %.4f, want %.4f", *result.Score, *tc.wantScore)
+				}
+			}
+			if len(result.Components) != tc.wantComps {
+				t.Errorf("components = %d, want %d", len(result.Components), tc.wantComps)
 			}
 			if tc.wantWarn && len(result.Warnings) == 0 {
 				t.Errorf("expected a warning")
 			}
+			if !tc.wantWarn && len(result.Warnings) != 0 {
+				t.Errorf("unexpected warning(s): %v", result.Warnings)
+			}
 			if tc.wantBullet > 0 && len(result.Bullets) != tc.wantBullet {
 				t.Errorf("bullets = %d, want %d", len(result.Bullets), tc.wantBullet)
 			}
-			if tc.name == "score clamped above 5" {
-				if result.Score == nil || *result.Score != 5 {
-					t.Errorf("score not clamped to 5: %v", result.Score)
+			if tc.name == "outcome clamp before mean" {
+				want := []float64{5, 0, 3}
+				for i, c := range result.Components {
+					if c.Score != want[i] {
+						t.Errorf("component %s = %v, want %v (clamp must precede the mean)", c.Name, c.Score, want[i])
+					}
 				}
 			}
 		})
@@ -322,10 +355,11 @@ func TestCompositeExcludesUnsupportedLLMLens(t *testing.T) {
 	if composite == nil {
 		t.Fatal("composite nil; deterministic lenses keep it computable")
 	}
-	// Renormalized over authenticity (.30) + outcome (.30) + effort (.20); the
-	// unsupported prompting lens (.20) is dropped from both sum and weight.
-	want := (4.5*weightAuthenticity + 5*weightOutcome + 5*weightEffort) /
-		(weightAuthenticity + weightOutcome + weightEffort)
+	// Grade A (process) = mean of supported authenticity (4.5) and effort (5); the
+	// unsupported prompting lens is dropped. Grade B (solution) = outcome (5).
+	// Combined = mean(A, B).
+	wantA := (4.5 + 5) / 2.0
+	want := (wantA + 5) / 2.0
 	if diff := *composite - want; diff > 1e-9 || diff < -1e-9 {
 		t.Errorf("composite = %.4f, want %.4f (unsupported prompting must be excluded)", *composite, want)
 	}
@@ -515,5 +549,81 @@ func TestSubmitDeterministicPopulatesAndDegradesLLM(t *testing.T) {
 	// Composite is computable from the always-present deterministic lenses.
 	if report.Composite == nil {
 		t.Errorf("composite nil; deterministic lenses should keep it computable")
+	}
+	// Both LLM lenses degraded: Grade B (solution) is unscored, so Combined falls
+	// back to Grade A (process) alone.
+	if report.GradeSolution != nil {
+		t.Errorf("grade_solution = %v, want nil (outcome lens degraded)", *report.GradeSolution)
+	}
+	if report.GradeProcess == nil {
+		t.Fatal("grade_process nil; the deterministic process lenses should set it")
+	}
+	if report.Composite == nil || *report.Composite != *report.GradeProcess {
+		t.Errorf("composite (%v) should equal grade_process (%v) when solution is absent", report.Composite, report.GradeProcess)
+	}
+	// The grade fields survive a JSON round-trip.
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rt RunReport
+	if err := json.Unmarshal(data, &rt); err != nil {
+		t.Fatal(err)
+	}
+	if rt.GradeProcess == nil || *rt.GradeProcess != *report.GradeProcess || rt.GradeSolution != nil {
+		t.Errorf("grade fields did not round-trip: process=%v solution=%v", rt.GradeProcess, rt.GradeSolution)
+	}
+}
+
+func TestGrades(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	lens := func(name string, score float64, supported bool) LensResult {
+		return LensResult{Lens: name, Score: &score, Supported: supported}
+	}
+	eq := func(got, want *float64) bool {
+		if got == nil || want == nil {
+			return got == want
+		}
+		d := *got - *want
+		return d < 1e-9 && d > -1e-9
+	}
+	cases := []struct {
+		name                string
+		lenses              []LensResult
+		wantP, wantS, wantC *float64
+	}{
+		{
+			name:   "both grades present",
+			lenses: []LensResult{lens(LensAuthenticity, 4, true), lens(LensPrompting, 5, true), lens(LensEffort, 3, true), lens(LensOutcome, 5, true)},
+			wantP:  s(4), wantS: s(5), wantC: s(4.5), // process mean(4,5,3)=4, solution 5, combined 4.5
+		},
+		{
+			name:   "only process (outcome unsupported -> solution nil, combined = process)",
+			lenses: []LensResult{lens(LensAuthenticity, 4, true), lens(LensEffort, 2, true), lens(LensOutcome, 5, false)},
+			wantP:  s(3), wantS: nil, wantC: s(3),
+		},
+		{
+			name:   "only solution",
+			lenses: []LensResult{lens(LensOutcome, 4, true)},
+			wantP:  nil, wantS: s(4), wantC: s(4),
+		},
+		{
+			name:   "none supported",
+			lenses: []LensResult{lens(LensAuthenticity, 4, false), lens(LensOutcome, 5, false)},
+			wantP:  nil, wantS: nil, wantC: nil,
+		},
+		{
+			name:   "empty",
+			lenses: nil,
+			wantP:  nil, wantS: nil, wantC: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, sol, c := Grades(tc.lenses)
+			if !eq(p, tc.wantP) || !eq(sol, tc.wantS) || !eq(c, tc.wantC) {
+				t.Errorf("Grades() = (%v, %v, %v), want (%v, %v, %v)", p, sol, c, tc.wantP, tc.wantS, tc.wantC)
+			}
+		})
 	}
 }

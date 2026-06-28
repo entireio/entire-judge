@@ -2,8 +2,37 @@ package judge
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
+
+// lensDisplayRank orders lenses for display and JSON: the Grade A (process)
+// lenses first — authenticity, prompting_skill, effort_consistency — then the
+// Grade B (solution) lens idea_plan_execution, then descriptive lenses. This puts
+// effort_consistency above idea_plan_execution everywhere the lenses are shown.
+var lensDisplayRank = map[string]int{
+	LensAuthenticity: 0,
+	LensPrompting:    1,
+	LensEffort:       2,
+	LensOutcome:      3,
+	LensAgent:        4,
+}
+
+func lensRankOf(name string) int {
+	if r, ok := lensDisplayRank[name]; ok {
+		return r
+	}
+	return 99
+}
+
+// OrderLenses sorts a submission's lenses in place into the canonical display
+// order, so every surface (JSON, --plain, dashboard) presents the process-grade
+// lenses, then the solution-grade lens, then descriptive lenses.
+func OrderLenses(lenses []LensResult) {
+	sort.SliceStable(lenses, func(i, j int) bool {
+		return lensRankOf(lenses[i].Lens) < lensRankOf(lenses[j].Lens)
+	})
+}
 
 // authenticityLens computes the deterministic authenticity score from the
 // timeline rubric: predates_event caps low, clean_start floors high, mixed sits
@@ -142,42 +171,79 @@ func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
 		flags = append(flags, "insufficient_brain")
 	}
 
-	auth, hasAuth := scores[LensAuthenticity]
-	outcome, hasOutcome := scores[LensOutcome]
-	prompting, hasPrompting := scores[LensPrompting]
-	effort, hasEffort := scores[LensEffort]
-	if !hasAuth || !hasEffort {
-		// Authenticity and effort are deterministic and always present; their
-		// absence means the brain was too thin to score at all.
-		return nil, flags
+	_, hasOutcome := scores[LensOutcome]
+	_, hasPrompting := scores[LensPrompting]
+	if !hasOutcome {
+		if scored[LensOutcome] {
+			flags = append(flags, "idea_plan_execution_unsupported")
+		} else {
+			flags = append(flags, "idea_plan_execution_unscored")
+		}
 	}
+	if !hasPrompting {
+		if scored[LensPrompting] {
+			flags = append(flags, "prompting_skill_unsupported")
+		} else {
+			flags = append(flags, "prompting_skill_unscored")
+		}
+	}
+	// The composite is the combined total of the two component grades, the single
+	// source of truth for the score (Grades returns nil when no supported lens fed
+	// a grade — i.e. a brain too thin to score).
+	_, _, combined := Grades(lenses)
+	return combined, flags
+}
 
-	composite := auth * weightAuthenticity
-	weightUsed := weightAuthenticity
-	composite += effort * weightEffort
-	weightUsed += weightEffort
-	if hasOutcome {
-		composite += outcome * weightOutcome
-		weightUsed += weightOutcome
-	} else if scored[LensOutcome] {
-		flags = append(flags, "idea_plan_execution_unsupported")
-	} else {
-		flags = append(flags, "idea_plan_execution_unscored")
+// processLenses are the "how they worked" component (Grade A): the deterministic
+// timeline/effort signals plus the LLM prompting-skill read. solutionLenses are
+// the "what they built" component (Grade B).
+var processLenses = []string{LensAuthenticity, LensPrompting, LensEffort}
+
+// Grades computes the two component grades and their combined total from a
+// submission's scored lenses, in the spirit of a multi-component score (technical
+// + presentation): Grade A (process) is the mean of the supported process lenses
+// (authenticity, prompting_skill, effort_consistency); Grade B (solution) is the
+// supported idea_plan_execution score. Combined is the mean of whichever grades
+// are present, so the two components count equally regardless of how many lenses
+// feed each. A nil grade means no supported lens fed it.
+func Grades(lenses []LensResult) (process, solution, combined *float64) {
+	supported := map[string]float64{}
+	for _, l := range lenses {
+		if l.Score != nil && l.Supported {
+			supported[l.Lens] = *l.Score
+		}
 	}
-	if hasPrompting {
-		composite += prompting * weightPrompting
-		weightUsed += weightPrompting
-	} else if scored[LensPrompting] {
-		flags = append(flags, "prompting_skill_unsupported")
-	} else {
-		flags = append(flags, "prompting_skill_unscored")
+	var psum float64
+	var pn int
+	for _, name := range processLenses {
+		if v, ok := supported[name]; ok {
+			psum += v
+			pn++
+		}
 	}
-	// Renormalize so a missing LLM lens does not deflate the composite below what
-	// the present lenses justify.
-	if weightUsed > 0 {
-		composite = composite / weightUsed
+	if pn > 0 {
+		p := psum / float64(pn)
+		process = &p
 	}
-	return &composite, flags
+	if v, ok := supported[LensOutcome]; ok {
+		s := v
+		solution = &s
+	}
+	var csum float64
+	var cn int
+	if process != nil {
+		csum += *process
+		cn++
+	}
+	if solution != nil {
+		csum += *solution
+		cn++
+	}
+	if cn > 0 {
+		c := csum / float64(cn)
+		combined = &c
+	}
+	return process, solution, combined
 }
 
 // HardGateReason returns a non-empty exclusion reason for a degenerate timeline

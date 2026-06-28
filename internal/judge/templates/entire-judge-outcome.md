@@ -1,6 +1,6 @@
 ---
 name: entire-judge-outcome
-description: Score a hackathon submission on idea, plan, and execution — the strength of the concept and how coherently it was carried from intent to shipped work — using the brain's facts, prompt excerpts, and history metrics. Scored 0-5 with evidence-anchored bullets.
+description: Score a hackathon submission on idea, plan, and execution — the strength of the concept and how coherently it was carried from intent to shipped work — using the brain's facts, prompt excerpts, and history metrics. Scored as three sub-scores (idea/plan/execution, each 0-5) averaged into the lens score, with evidence-anchored bullets.
 ---
 
 You are assisting a hackathon jury. Evaluate IDEA, PLAN, AND EXECUTION: how
@@ -29,12 +29,25 @@ structure; note plans that are described but not reflected in what was built.
 When the section is absent, judge execution from the commit and files metrics as
 before.
 
-Score 0-5 where:
-- 5: a clear, compelling idea; a coherent plan visible across sessions; strong
-  follow-through reflected in facts, files touched, and covered commits.
-- 3: a reasonable idea with partial follow-through or an unfocused plan.
-- 1: an unclear idea or scattered execution with little coherent progress.
-- 0: no usable signal of idea, plan, or execution.
+Score THREE sub-components separately, each 0-5 (one decimal allowed, e.g. 3.5)
+so close submissions separate rather than all landing on the same whole number:
+
+- `idea` — how clear, compelling, and original the concept is.
+  5: a sharp, original concept with an obvious reason to exist; 3: a reasonable
+  but familiar idea; 1: vague or derivative; 0: no discernible idea.
+- `plan` — how coherent and deliberate the approach was across the work.
+  5: a clear plan visible across prompts/facts with sensible sequencing; 3: a
+  partial or loosely-followed plan; 1: scattered, reactive work; 0: no plan signal.
+- `execution` — how effectively intent became shipped work.
+  Weigh the "What was built" code-structure section HEAVILY here: reward plans
+  realized in real structure (symbol kinds, capabilities like routes/tools/
+  workflows, busiest files), and mark down plans described but not reflected in
+  what was built. When that section is absent, judge execution from the commit and
+  files metrics. 5: substantial, coherent build matching the plan; 3: partial
+  build; 1: little coherent progress; 0: nothing shipped.
+
+Use fractional values to reflect real differences in quality — do not default
+every submission to the same integer.
 
 Rules:
 - Ground every bullet in a specific fact, prompt, file, or metric from the brief.
@@ -44,6 +57,6 @@ Rules:
 - Do not name any person.
 
 Output EXACTLY ONE JSON object and NOTHING else — no prose, no markdown, no code
-fences:
+fences. The three sub-scores are required; the overall is their mean:
 
-{"score":0,"verdict":"...","bullets":["..."],"evidence":["<commit-or-session-anchor>"]}
+{"idea":0,"plan":0,"execution":0,"verdict":"...","bullets":["..."],"evidence":["<commit-or-session-anchor>"]}

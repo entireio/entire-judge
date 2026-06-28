@@ -26,12 +26,6 @@ const (
 	templateOutcome      = "outcome"
 	templateSummary      = "summary"
 
-	// Composite weights. agent_leverage is descriptive and excluded.
-	weightAuthenticity = 0.30
-	weightOutcome      = 0.30
-	weightPrompting    = 0.20
-	weightEffort       = 0.20
-
 	// Timeline categories: the deterministic backbone of the authenticity lens.
 	TimelineCleanStart        = "clean_start"
 	TimelineMixed             = "mixed"
@@ -88,19 +82,28 @@ type Metrics struct {
 	SemanticCapabilities []string `json:"semantic_capabilities,omitempty"`
 }
 
+// LensComponent is a named sub-score of a lens (e.g. the outcome lens's idea,
+// plan, and execution), each 0-5. A lens whose Score is the mean of several
+// sub-components records them here so the jury can see what drove the grade.
+type LensComponent struct {
+	Name  string  `json:"name"`
+	Score float64 `json:"score"`
+}
+
 // LensResult is one lens's verdict on a submission. Score is a pointer so an
 // unscored (descriptive) lens can omit it. Supported records whether any LLM
 // evidence anchor resolved against the brain; an unsupported lens is advisory
-// color only.
+// color only. Components, when present, are the sub-scores Score is the mean of.
 type LensResult struct {
-	Lens      string   `json:"lens"`
-	Score     *float64 `json:"score,omitempty"`
-	Verdict   string   `json:"verdict,omitempty"`
-	Bullets   []string `json:"bullets,omitempty"`
-	Evidence  []string `json:"evidence,omitempty"`
-	Supported bool     `json:"supported"`
-	Warnings  []string `json:"warnings,omitempty"`
-	Raw       string   `json:"raw,omitempty"`
+	Lens       string          `json:"lens"`
+	Score      *float64        `json:"score,omitempty"`
+	Components []LensComponent `json:"components,omitempty"`
+	Verdict    string          `json:"verdict,omitempty"`
+	Bullets    []string        `json:"bullets,omitempty"`
+	Evidence   []string        `json:"evidence,omitempty"`
+	Supported  bool            `json:"supported"`
+	Warnings   []string        `json:"warnings,omitempty"`
+	Raw        string          `json:"raw,omitempty"`
 }
 
 // RunMetadata records how a report was produced so a result is reproducible.
@@ -115,16 +118,20 @@ type RunMetadata struct {
 
 // RunReport is the per-submission report.
 type RunReport struct {
-	SchemaVersion int          `json:"schema_version"`
-	Kind          string       `json:"kind"`
-	Advisory      bool         `json:"advisory"`
-	Disclaimer    string       `json:"disclaimer"`
-	GeneratedAt   time.Time    `json:"generated_at"`
-	SubmissionID  string       `json:"submission_id"`
-	RepoDir       string       `json:"repo_dir"`
-	BrainPath     string       `json:"brain_path"`
-	Run           RunMetadata  `json:"run"`
-	Deterministic Metrics      `json:"deterministic"`
+	SchemaVersion int         `json:"schema_version"`
+	Kind          string      `json:"kind"`
+	Advisory      bool        `json:"advisory"`
+	Disclaimer    string      `json:"disclaimer"`
+	GeneratedAt   time.Time   `json:"generated_at"`
+	SubmissionID  string      `json:"submission_id"`
+	RepoDir       string      `json:"repo_dir"`
+	BrainPath     string      `json:"brain_path"`
+	Run           RunMetadata `json:"run"`
+	Deterministic Metrics     `json:"deterministic"`
+	// GradeProcess (A) and GradeSolution (B) are the two component grades;
+	// Composite is their combined total (their equal-weighted mean). See Grades.
+	GradeProcess  *float64     `json:"grade_process,omitempty"`
+	GradeSolution *float64     `json:"grade_solution,omitempty"`
 	Composite     *float64     `json:"composite,omitempty"`
 	Flags         []string     `json:"flags,omitempty"`
 	Summary       string       `json:"summary,omitempty"`
