@@ -87,11 +87,13 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 		report.Warnings = append(report.Warnings, "one or more LLM lenses produced no usable output; deterministic lenses are unaffected")
 	}
 
-	// 6. summary — a short LLM-written overview (what they built, how it went).
-	//    Narrative only, never scored; on failure the renderers fall back to the
-	//    composed summary, so an empty result is not an error condition.
+	// 6. summary — a short overview (what they built, how it went). Narrative
+	//    only, never scored; on LLM failure, store the deterministic fallback so
+	//    JSON consumers get the same non-empty summary as the text/TUI renderers.
 	if summary, serr := runSummary(ctx, sc, params, run); serr == nil && summary != "" {
 		report.Summary = summary
+	} else {
+		report.Summary = ComposeSummary(report)
 	}
 
 	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics)

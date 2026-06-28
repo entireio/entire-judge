@@ -80,7 +80,7 @@ func renderDetail(th Theme, r *judge.RunReport, meta judge.RunMetadata, excluded
 			composite = fmt.Sprintf("%.2f / 5", *r.Composite)
 			color = th.scoreColor(*r.Composite)
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(color).Bold(true).Render("Composite  "+composite))
+		b.WriteString(lipgloss.NewStyle().Foreground(color).Bold(true).Render("Composite  " + composite))
 		b.WriteString("\n\n")
 	}
 

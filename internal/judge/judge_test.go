@@ -373,8 +373,8 @@ func TestParseSummaryOutput(t *testing.T) {
 		`{"summary":"A clean build."}`:                        "A clean build.",
 		"```json\n{\"summary\":\"Fenced  output\"}\n```":      "Fenced output",
 		"chatter before {\"summary\":\"mid text\"} and after": "mid text",
-		"no json here":                                        "",
-		`{"nope":"x"}`:                                        "",
+		"no json here": "",
+		`{"nope":"x"}`: "",
 	}
 	for in, want := range cases {
 		if got := parseSummaryOutput(in); got != want {
@@ -411,6 +411,29 @@ func TestComposeSummaryAndSummaryText(t *testing.T) {
 	report.Summary = "An LLM-written overview."
 	if SummaryText(report) != "An LLM-written overview." {
 		t.Errorf("SummaryText should return the LLM summary when set")
+	}
+}
+
+func TestSubmitPopulatesFallbackSummaryWhenSummaryAgentFails(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	brainDir := writeBrainFixture(t, now, nil, nil)
+	runner := fakeRunner{gitLog: gitLogRecord("deadbeef00000", "", now.Add(-80*time.Minute).Format(time.RFC3339), "dev", "dev@x.com", "init")}
+
+	var failing agent.Runner = func(ctx context.Context, dir string, args []string, input []byte, timeout time.Duration) (string, error) {
+		return "", errNoFakeResponse
+	}
+	report, err := Submit(context.Background(), runner, failing, t.TempDir(), brainDir, "gh/team/proj", Params{
+		Agent:          "claude-code",
+		HackathonStart: now.Add(-2 * time.Hour),
+	}, now)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if strings.TrimSpace(report.Summary) == "" {
+		t.Fatal("summary should be populated with deterministic fallback")
+	}
+	if !strings.Contains(report.Summary, "Insufficient brain") {
+		t.Fatalf("summary = %q, want insufficient-brain fallback", report.Summary)
 	}
 }
 
