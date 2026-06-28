@@ -443,9 +443,9 @@ The lenses behind the grades:
   `plan`, and `execution` — averaged into the lens score. Three fractional
   sub-components (each 0–5) instead of one whole number let close submissions
   separate rather than clustering on the same integer. The `execution` sub-score
-  weighs the `entire-sem` semantic layer ("what was built") heavily. The
-  sub-scores appear under the lens on the detail page, in `judge run --plain`, and
-  as the lens `components` array in `--json`.
+  weighs the `entire-sem` semantic layer ("what was built") heavily. idea, plan,
+  and execution appear as their own `(B · solution)` bars on the detail page and in
+  `judge run --plain`, and as the lens `components` array in `--json`.
 - `agent_leverage`: descriptive, not scored and not part of any grade.
 
 ### Excluded submissions

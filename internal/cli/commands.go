@@ -312,12 +312,16 @@ func printRunReport(cmd *cobra.Command, report *judge.RunReport) {
 	fmt.Fprintf(out, "Summary: %s\n\n", judge.SummaryText(report))
 
 	for _, lens := range report.Lenses {
-		fmt.Fprintf(out, "%s %s\n", tui.ScoreBar(lens.Score), lens.Lens)
-		// idea/plan/execution render as their own indented score bars under the
-		// outcome lens.
-		for _, c := range lens.Components {
-			cs := c.Score
-			fmt.Fprintf(out, "    %s %s\n", tui.ScoreBar(&cs), c.Name)
+		// The outcome lens shows as its idea/plan/execution components — their own
+		// bars tagged (B · solution) — to match the dashboard; the aggregate Grade B
+		// is in the Combined line above.
+		if lens.Lens == judge.LensOutcome && len(lens.Components) > 0 {
+			for _, c := range lens.Components {
+				cs := c.Score
+				fmt.Fprintf(out, "%s %s (B · solution)\n", tui.ScoreBar(&cs), c.Name)
+			}
+		} else {
+			fmt.Fprintf(out, "%s %s\n", tui.ScoreBar(lens.Score), lens.Lens)
 		}
 		if lens.Verdict != "" {
 			fmt.Fprintf(out, "  %s\n", lens.Verdict)
