@@ -105,14 +105,20 @@ func renderDetail(th Theme, r *judge.RunReport, meta judge.RunMetadata, excluded
 	b.WriteString("\n")
 	for i := range r.Lenses {
 		lens := r.Lenses[i]
+		// The outcome lens shows as its idea/plan/execution components — each its
+		// own bar, aligned with the Grade A lens bars and tagged (B · solution),
+		// rather than a single aggregate bar (the aggregate is the Combined header).
+		if lens.Lens == judge.LensOutcome && len(lens.Components) > 0 {
+			tag := th.dimStyle().Render("(" + lensComponent[judge.LensOutcome] + ")")
+			for _, c := range lens.Components {
+				cv := c.Score
+				b.WriteString("  " + coloredScoreBar(th, &cv) + "  " + c.Name + "  " + tag + "\n")
+			}
+			continue
+		}
 		label := lens.Lens + "  " + th.dimStyle().Render("("+lensComponent[lens.Lens]+")")
 		if lens.Score != nil {
 			b.WriteString("  " + coloredScoreBar(th, lens.Score) + "  " + label + "\n")
-			// idea/plan/execution as their own indented sub-bars under the lens.
-			for _, c := range lens.Components {
-				cv := c.Score
-				b.WriteString("      " + coloredScoreBar(th, &cv) + "  " + th.dimStyle().Render(c.Name) + "\n")
-			}
 		} else {
 			// descriptive (agent_leverage)
 			desc := lens.Verdict

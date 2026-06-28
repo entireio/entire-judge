@@ -90,14 +90,16 @@ func TestThemeByName(t *testing.T) {
 func TestRenderDetailSectionsAndSummary(t *testing.T) {
 	th, _ := ThemeByName("default")
 	out := renderDetail(th, sampleReport(), judge.RunMetadata{Agent: "claude-code"}, false, 1, 80)
-	for _, want := range []string{"Score", "Summary", "Findings", "Combined", "Grade A", "Grade B", "gh/team/syntheci-shipping", "maritime-intelligence", "Codex×14", "Built RAG", "idea", "plan", "execution", "4.5", "4.75", "4.83"} {
+	for _, want := range []string{"Score", "Summary", "Findings", "Combined", "Grade A", "Grade B", "B · solution", "gh/team/syntheci-shipping", "maritime-intelligence", "Codex×14", "Built RAG", "idea", "plan", "execution", "4.5", "4.75", "4.83"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderDetail missing %q", want)
 		}
 	}
-	// Process lenses (incl. effort_consistency) render above the solution lens.
-	if eff, idea := strings.Index(out, "effort_consistency"), strings.Index(out, "idea_plan_execution"); eff < 0 || idea < 0 || eff > idea {
-		t.Errorf("effort_consistency (%d) should render above idea_plan_execution (%d)", eff, idea)
+	// Grade A lenses (incl. effort_consistency) render above the Grade B component
+	// bars, whose tag is parenthesized "(B · solution)" (distinct from the header's
+	// "Grade B · solution").
+	if a, bIdx := strings.Index(out, "effort_consistency"), strings.Index(out, "(B · solution)"); a < 0 || bIdx < 0 || a > bIdx {
+		t.Errorf("Grade A lenses (effort_consistency idx %d) should render above the Grade B component bars (idx %d)", a, bIdx)
 	}
 }
 
