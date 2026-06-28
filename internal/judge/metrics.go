@@ -78,7 +78,6 @@ func computeMetrics(ctx context.Context, runner gitutil.CommandRunner, repoDir s
 		metrics.TotalCommits = coverage.TotalCommits
 		metrics.PreSessionCommits = coverage.PreSessionCommits
 		metrics.CoveredCommits = coverage.CoveredCommits
-		metrics.CheckpointedUnexportedCommits = coverage.CheckpointedUnexportedCommits
 		metrics.MissingSessionCommits = coverage.MissingSessionCommits
 		metrics.NoSessionHistory = coverage.NoSessionHistoryCommits
 		metrics.MergeCommits = coverage.MergeCommits

@@ -134,8 +134,8 @@ func timelineSummary(m Metrics) string {
 	fmt.Fprintf(&b, "category: %s (%s)\n", m.TimelineCategory, m.TimelineReason)
 	fmt.Fprintf(&b, "sessions: %d, human prompts: %d, turns: %d, files touched: %d, facts: %d\n",
 		m.Sessions, m.HumanPrompts, m.Turns, m.FilesTouched, m.Facts)
-	fmt.Fprintf(&b, "commits: total %d, pre-session %d, covered %d, checkpointed-unexported %d, missing-session %d, no-session-history %d, merges %d\n",
-		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.CheckpointedUnexportedCommits, m.MissingSessionCommits, m.NoSessionHistory, m.MergeCommits)
+	fmt.Fprintf(&b, "commits: total %d, pre-session %d, covered %d, no-checkpoint %d, no-session-history %d, merges %d\n",
+		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.MissingSessionCommits, m.NoSessionHistory, m.MergeCommits)
 	fmt.Fprintf(&b, "tokens: input %d, output %d, cache-read %d, cache-creation %d\n",
 		m.InputTokens, m.OutputTokens, m.CacheReadTokens, m.CacheCreationTokens)
 	if m.FirstSessionAt != nil {

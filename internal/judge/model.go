@@ -54,13 +54,12 @@ type Metrics struct {
 	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 
-	TotalCommits                  int `json:"total_commits"`
-	PreSessionCommits             int `json:"pre_session_commits"`
-	CoveredCommits                int `json:"covered_commits"`
-	CheckpointedUnexportedCommits int `json:"checkpointed_unexported_commits"`
-	MissingSessionCommits         int `json:"missing_session_commits"`
-	NoSessionHistory              int `json:"no_session_history_commits"`
-	MergeCommits                  int `json:"merge_commits"`
+	TotalCommits          int `json:"total_commits"`
+	PreSessionCommits     int `json:"pre_session_commits"`
+	CoveredCommits        int `json:"covered_commits"`
+	MissingSessionCommits int `json:"missing_session_commits"`
+	NoSessionHistory      int `json:"no_session_history_commits"`
+	MergeCommits          int `json:"merge_commits"`
 
 	OldestSessionAt   *time.Time `json:"oldest_session_at,omitempty"`
 	FirstSessionAt    *time.Time `json:"first_session_at,omitempty"`

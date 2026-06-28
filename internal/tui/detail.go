@@ -162,10 +162,11 @@ func findingsBlock(th Theme, r *judge.RunReport, width int) string {
 		m.Sessions, m.Turns, m.HumanPrompts, m.FilesTouched, m.Facts))
 	metric("effort", fmt.Sprintf("%s on task · %d in / %d out tokens",
 		humanMinutes(m.TimeOnTaskMinutes), m.InputTokens, m.OutputTokens))
-	// The five coverage buckets partition TotalCommits, so they reconcile to the
-	// total; merges are an overlapping tally, shown parenthetically.
-	commitsLine := fmt.Sprintf("%d total · %d pre-session · %d covered · %d checkpointed-unexported · %d missing-session",
-		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.CheckpointedUnexportedCommits, m.MissingSessionCommits)
+	// The coverage buckets partition TotalCommits, so they reconcile to the total;
+	// "covered" is every commit made under an Entire session (carries a checkpoint
+	// trailer). Merges are an overlapping tally, shown parenthetically.
+	commitsLine := fmt.Sprintf("%d total · %d pre-session · %d covered · %d no-checkpoint",
+		m.TotalCommits, m.PreSessionCommits, m.CoveredCommits, m.MissingSessionCommits)
 	if m.NoSessionHistory > 0 {
 		commitsLine += fmt.Sprintf(" · %d no-session-history", m.NoSessionHistory)
 	}

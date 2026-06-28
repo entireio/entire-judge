@@ -46,11 +46,13 @@ func TestBuildHistoryCoverageCoverageClasses(t *testing.T) {
 	missingAt := oldest.Add(2 * time.Hour).Format(time.RFC3339)
 
 	data := record("pre0001", "", preAt, "pre-session work") +
-		record("cov0001", "", coveredAt, "exported work\n\nEntire-Checkpoint: aaaaaaaaaaaa") +
-		record("unx0001", "", coveredAt, "checkpointed but not exported\n\nEntire-Checkpoint: bbbbbbbbbbbb") +
+		record("cov0001", "", coveredAt, "session work\n\nEntire-Checkpoint: aaaaaaaaaaaa") +
+		record("cov0002", "", coveredAt, "more session work (intermediate checkpoint)\n\nEntire-Checkpoint: bbbbbbbbbbbb") +
 		record("mis0001", "", missingAt, "no checkpoint trailer")
 	runner := fakeRunner{gitLog: data}
 
+	// A commit carrying any Entire checkpoint trailer is covered, whether or not
+	// that exact checkpoint is the session's exported latest-checkpoint id.
 	exported := map[string]struct{}{"aaaaaaaaaaaa": {}}
 	cov := BuildHistoryCoverage(context.Background(), runner, "/repo", &oldest, exported)
 	if cov.TotalCommits != 4 {
@@ -59,22 +61,15 @@ func TestBuildHistoryCoverageCoverageClasses(t *testing.T) {
 	if cov.PreSessionCommits != 1 {
 		t.Errorf("pre-session = %d, want 1", cov.PreSessionCommits)
 	}
-	if cov.CoveredCommits != 1 {
-		t.Errorf("covered = %d, want 1", cov.CoveredCommits)
-	}
-	if cov.CheckpointedUnexportedCommits != 1 {
-		t.Errorf("checkpointed-unexported = %d, want 1", cov.CheckpointedUnexportedCommits)
+	if cov.CoveredCommits != 2 {
+		t.Errorf("covered = %d, want 2 (both checkpointed commits, including the intermediate one)", cov.CoveredCommits)
 	}
 	if cov.MissingSessionCommits != 1 {
 		t.Errorf("missing-session = %d, want 1", cov.MissingSessionCommits)
 	}
-	if cov.ExportedCheckpoints != 1 {
-		t.Errorf("exported checkpoints = %d, want 1", cov.ExportedCheckpoints)
-	}
-	// The five coverage buckets must partition TotalCommits exactly (merges are an
+	// The coverage buckets must partition TotalCommits exactly (merges are an
 	// overlapping tally, not part of the partition).
-	sum := cov.PreSessionCommits + cov.CoveredCommits + cov.CheckpointedUnexportedCommits +
-		cov.MissingSessionCommits + cov.NoSessionHistoryCommits
+	sum := cov.PreSessionCommits + cov.CoveredCommits + cov.MissingSessionCommits + cov.NoSessionHistoryCommits
 	if sum != cov.TotalCommits {
 		t.Errorf("coverage buckets sum to %d, want %d (must partition total)", sum, cov.TotalCommits)
 	}

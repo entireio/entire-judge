@@ -61,17 +61,16 @@ type Commit struct {
 // captured session history. It is the deterministic backbone of the authenticity
 // lens.
 type HistoryCoverage struct {
-	TotalCommits                  int        `json:"total_commits"`
-	PreSessionCommits             int        `json:"pre_session_commits"`
-	CoveredCommits                int        `json:"covered_commits"`
-	CheckpointedUnexportedCommits int        `json:"checkpointed_unexported_commits"`
-	MissingSessionCommits         int        `json:"missing_session_commits"`
-	NoSessionHistoryCommits       int        `json:"no_session_history_commits"`
-	MergeCommits                  int        `json:"merge_commits"`
-	OldestSessionAt               *time.Time `json:"oldest_session_at,omitempty"`
-	ExportedCheckpoints           int        `json:"exported_checkpoints"`
-	UncoveredCommits              []Commit   `json:"uncovered_commits,omitempty"`
-	GeneratedFrom                 string     `json:"generated_from"`
+	TotalCommits            int        `json:"total_commits"`
+	PreSessionCommits       int        `json:"pre_session_commits"`
+	CoveredCommits          int        `json:"covered_commits"`
+	MissingSessionCommits   int        `json:"missing_session_commits"`
+	NoSessionHistoryCommits int        `json:"no_session_history_commits"`
+	MergeCommits            int        `json:"merge_commits"`
+	OldestSessionAt         *time.Time `json:"oldest_session_at,omitempty"`
+	ExportedCheckpoints     int        `json:"exported_checkpoints"`
+	UncoveredCommits        []Commit   `json:"uncovered_commits,omitempty"`
+	GeneratedFrom           string     `json:"generated_from"`
 }
 
 // BuildHistoryCoverage runs `git log --reverse` in repoDir and classifies every
@@ -91,7 +90,7 @@ func BuildHistoryCoverage(ctx context.Context, runner CommandRunner, repoDir str
 	commits := ParseGitLog(stdout)
 	for i := range commits {
 		commit := commits[i]
-		classifyCommitCoverage(&commit, oldestSession, exportedCheckpoints)
+		classifyCommitCoverage(&commit, oldestSession)
 		coverage.TotalCommits++
 		if commit.Merge {
 			coverage.MergeCommits++
@@ -101,9 +100,6 @@ func BuildHistoryCoverage(ctx context.Context, runner CommandRunner, repoDir str
 			coverage.PreSessionCommits++
 		case "covered":
 			coverage.CoveredCommits++
-		case "checkpointed_unexported":
-			coverage.CheckpointedUnexportedCommits++
-			coverage.UncoveredCommits = append(coverage.UncoveredCommits, commit)
 		case "missing_session":
 			coverage.MissingSessionCommits++
 			coverage.UncoveredCommits = append(coverage.UncoveredCommits, commit)
@@ -149,13 +145,13 @@ func ParseGitLog(data []byte) []Commit {
 	return commits
 }
 
-// classifyCommitCoverage assigns a coverage class to one commit:
-//   - pre_session: committed before any captured session existed
-//   - covered: carries a checkpoint trailer that was exported
-//   - checkpointed_unexported: has a checkpoint trailer that was not exported
-//   - missing_session: no checkpoint trailer at all
-//   - no_session_history: there is no session history to compare against
-func classifyCommitCoverage(commit *Commit, oldestSession *time.Time, exportedCheckpoints map[string]struct{}) {
+// classifyCommitCoverage labels a commit by how it relates to the brain's session
+// history. A commit carrying an Entire checkpoint trailer was made under an Entire
+// session, so it is covered — the brain need not have exported that exact
+// checkpoint (it records only one latest-checkpoint id per session, not every
+// intermediate one, so matching on the exported set alone would mislabel genuine
+// in-session commits as uncovered).
+func classifyCommitCoverage(commit *Commit, oldestSession *time.Time) {
 	if oldestSession == nil {
 		commit.Coverage = "no_session_history"
 		return
@@ -164,14 +160,8 @@ func classifyCommitCoverage(commit *Commit, oldestSession *time.Time, exportedCh
 		commit.Coverage = "pre_session"
 		return
 	}
-	for _, checkpoint := range commit.Checkpoints {
-		if _, ok := exportedCheckpoints[checkpoint]; ok {
-			commit.Coverage = "covered"
-			return
-		}
-	}
 	if len(commit.Checkpoints) > 0 {
-		commit.Coverage = "checkpointed_unexported"
+		commit.Coverage = "covered"
 		return
 	}
 	commit.Coverage = "missing_session"
