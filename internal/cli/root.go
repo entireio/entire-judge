@@ -115,6 +115,7 @@ type runFlags struct {
 	theme     string
 	json      bool
 	plain     bool
+	jobs      int
 }
 
 func registerRunFlags(cmd *cobra.Command, flags *runFlags) {
@@ -125,6 +126,7 @@ func registerRunFlags(cmd *cobra.Command, flags *runFlags) {
 	cmd.Flags().StringVar(&flags.theme, "theme", "", "TUI color theme: default, catppuccin, gruvbox, tokyonight (or ENTIRE_JUDGE_THEME)")
 	cmd.Flags().BoolVar(&flags.json, "json", false, "Emit machine-readable JSON")
 	cmd.Flags().BoolVar(&flags.plain, "plain", false, "Emit the rendered text summary (never the TUI)")
+	cmd.Flags().IntVar(&flags.jobs, "jobs", 4, "rank: score up to N submissions concurrently (1 = sequential); scoring is LLM-latency-bound, so this scales well")
 }
 
 // parseHackathonStart parses the optional RFC3339 start time. An empty string

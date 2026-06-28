@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -130,24 +131,39 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 
 	var reports []judge.RunReport
 	var excludedReports []judge.RunReport
-	for i, checkout := range checkouts {
-		// Scoring runs the LLM lenses per submission before the dashboard opens,
-		// so emit progress to stderr — otherwise a multi-submission rank looks
-		// like a silent hang. (stderr keeps --json/--plain stdout clean, and the
-		// TUI's alt-screen clears these lines when it takes over.)
-		fmt.Fprintf(cmd.ErrOrStderr(), "scoring %d/%d: %s\n", i+1, len(checkouts), filepath.Base(checkout))
+
+	// Score the submissions, up to flags.jobs at once. Each submission is fully
+	// independent (its own brain, git checkout, and agent process), and scoring is
+	// dominated by LLM-call latency, so concurrency cuts wall-clock close to
+	// linearly. Results are returned in checkout order, not completion order, so
+	// the assembled board is identical to a sequential run.
+	scoreOne := func(checkout string) scoreResult {
+		name := filepath.Base(checkout)
 		// Resolve each submission's brain exactly as `run` does, so the
 		// commit-timeline lens reads the real checkout (not a brain-dir parent).
 		storage := resolveBrainStorage(cmd.Context(), opts.Runner, opts.Env, checkout)
 		if !brainstore.Exists(storage.BrainDir) {
-			report.Warnings = append(report.Warnings, fmt.Sprintf("%s: no exported brain (run `entire brain refresh` first)", filepath.Base(checkout)))
-			continue
+			return scoreResult{name: name, warning: fmt.Sprintf("%s: no exported brain (run `entire brain refresh` first)", name)}
 		}
 		sub, serr := judge.Submit(cmd.Context(), opts.Runner, run, checkout, storage.BrainDir, storage.Key, params, opts.Now())
 		if serr != nil {
-			report.Warnings = append(report.Warnings, fmt.Sprintf("%s: %v", filepath.Base(checkout), serr))
+			return scoreResult{name: name, warning: fmt.Sprintf("%s: %v", name, serr)}
+		}
+		return scoreResult{name: name, report: sub}
+	}
+	// Progress goes to stderr — otherwise a multi-submission rank looks like a
+	// silent hang. (stderr keeps --json/--plain stdout clean, and the TUI's
+	// alt-screen clears these lines when it takes over.)
+	results := scoreCheckouts(checkouts, flags.jobs, scoreOne, func(done, total int, name string) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "scored %d/%d: %s\n", done, total, name)
+	})
+	for i := range results {
+		res := results[i]
+		if res.warning != "" {
+			report.Warnings = append(report.Warnings, res.warning)
 			continue
 		}
+		sub := res.report
 		// Hard gates: degenerate timelines are excluded from the ordered table
 		// rather than silently averaged into it.
 		if reason := judge.HardGateReason(sub.Deterministic.TimelineCategory); reason != "" {
@@ -223,6 +239,51 @@ func compositeOf(r judge.RunReport) float64 {
 		return -1
 	}
 	return *r.Composite
+}
+
+// scoreResult is one submission's outcome from the concurrent scoring pass:
+// either a scored report or a warning (no brain / scoring error), never both.
+type scoreResult struct {
+	name    string
+	report  *judge.RunReport
+	warning string
+}
+
+// scoreCheckouts scores each checkout via scoreOne using up to jobs concurrent
+// workers, returning the results in CHECKOUT order (not completion order) so the
+// assembled board is deterministic regardless of which submissions finish first.
+// progress, when non-nil, is called once per completed submission under a lock,
+// so it is safe to write to a shared stderr.
+func scoreCheckouts(checkouts []string, jobs int, scoreOne func(checkout string) scoreResult, progress func(done, total int, name string)) []scoreResult {
+	if jobs < 1 {
+		jobs = 1
+	}
+	if jobs > len(checkouts) {
+		jobs = len(checkouts)
+	}
+	results := make([]scoreResult, len(checkouts))
+	sem := make(chan struct{}, jobs)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	done := 0
+	for i := range checkouts {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			res := scoreOne(checkouts[i])
+			results[i] = res
+			mu.Lock()
+			done++
+			if progress != nil {
+				progress(done, len(checkouts), res.name)
+			}
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	return results
 }
 
 // applyGrades recomputes each report's component grades and combined composite
