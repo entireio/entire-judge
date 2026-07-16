@@ -20,6 +20,8 @@ const (
 	contextMaxBytes = 96 * 1024
 	// excerptMaxBytes bounds the human-prompt excerpt section specifically.
 	excerptMaxBytes = 64 * 1024
+	// assistantCtxMaxBytes bounds the assistant-turn integrity-context section.
+	assistantCtxMaxBytes = 32 * 1024
 	// LensTimeout is the default per-lens agent timeout.
 	LensTimeout = 5 * time.Minute
 
@@ -43,6 +45,12 @@ type submissionContext struct {
 	Coverage *gitutil.HistoryCoverage
 	Metrics  Metrics
 	Semantic *brainstore.SemanticSummary
+
+	// IntegritySignal is true when at least one ASSISTANT turn in the submission's
+	// transcripts contains an integrity keyword — the REAL brain-side warning that
+	// gates the integrity red flag (see DeriveIntegrityFlag). Without it, an LLM
+	// hallucinating a low integrity score on a clean team must not raise the flag.
+	IntegritySignal bool
 
 	Brief string
 }
@@ -78,10 +86,32 @@ func buildBrief(sc submissionContext) string {
 		b.WriteString(sec)
 	}
 
-	excerpts := humanPromptExcerpts(sc, excerptMaxBytes)
-	if excerpts != "" {
-		b.WriteString("\n## Human prompts (session excerpts)\n\n")
-		b.WriteString(excerpts)
+	// The integrity (assistant-context) section carries the load-bearing warning
+	// signal, so it must NEVER be the section a tail-truncate sacrifices on a large
+	// submission. Build it first and RESERVE room for it: the human-prompt excerpts
+	// then get only the budget left after the base sections and this section (plus a
+	// small safety margin), capped at excerptMaxBytes and floored at 0. This keeps
+	// the total under contextMaxBytes by construction, so the integrity section —
+	// appended last for readable order — always survives intact.
+	var integritySection string
+	if ctx := assistantContextExcerpts(sc, assistantCtxMaxBytes); ctx != "" {
+		integritySection = "\n## Assistant messages & adjacent human turns (integrity context)\n\n" + ctx
+	}
+
+	const reserveMargin = 1024
+	excerptBudget := excerptMaxBytes
+	if remaining := contextMaxBytes - b.Len() - len(integritySection) - reserveMargin; remaining < excerptBudget {
+		excerptBudget = remaining
+	}
+	if excerptBudget > 0 {
+		if excerpts := humanPromptExcerpts(sc, excerptBudget); excerpts != "" {
+			b.WriteString("\n## Human prompts (session excerpts)\n\n")
+			b.WriteString(excerpts)
+		}
+	}
+
+	if integritySection != "" {
+		b.WriteString(integritySection)
 	}
 
 	out := b.String()
@@ -89,6 +119,32 @@ func buildBrief(sc submissionContext) string {
 		out = truncateString(out, contextMaxBytes)
 	}
 	return out
+}
+
+// hasAssistantIntegritySignal reports whether any ASSISTANT turn across the
+// submission's transcripts contains an integrity keyword — the same near-warning
+// cue assistantContextExcerpts uses to prioritize windows (containsIntegrityKeyword
+// over brainstore.ExtractConversationTurns). It is the REAL brain-side signal that
+// gates the integrity red flag: without an assistant warning the flag must not
+// fire, so an LLM hallucinating a low integrity score on a clean team cannot brand
+// it a cheater.
+func hasAssistantIntegritySignal(sc submissionContext) bool {
+	for i := range sc.Sessions {
+		session := sc.Sessions[i]
+		if session.TranscriptPath == "" {
+			continue
+		}
+		raw, err := brainstore.ReadRelativeFile(sc.BrainDir, session.TranscriptPath)
+		if err != nil {
+			continue
+		}
+		for _, turn := range brainstore.ExtractConversationTurns(raw) {
+			if turn.Role == "assistant" && containsIntegrityKeyword(turn.Text) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // semanticSummarySection renders the entire-sem digest — what the team actually
@@ -187,6 +243,96 @@ func humanPromptExcerpts(sc submissionContext, maxBytes int) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// integrityKeywords are the near-warning cues used ONLY to prioritize which
+// assistant-turn windows survive truncation of the integrity-context section (the
+// LLM does the actual judging). Substrings, matched case-insensitively.
+var integrityKeywords = []string{
+	"contaminat", "test set", "test-set", "train/test", "train test", "leak",
+	"overfit", "cheat", "plagiar", "fabricat", "hardcod", "hard-cod", "hard cod",
+	"invalid", "illegal", "against the rules", "rules violation", "held-out",
+	"held out", "training data", "ground truth", "evaluat", "not allowed",
+	"integrity", "disqualif",
+}
+
+func containsIntegrityKeyword(s string) bool {
+	lower := strings.ToLower(s)
+	for _, k := range integrityKeywords {
+		if strings.Contains(lower, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// assistantContextExcerpts renders the ASSISTANT turns (where an integrity warning
+// would live) each with its adjacent human turns (whether the team addressed or
+// overrode it), grouped per session with a session-id + timestamp anchor so the
+// integrity lens can cite evidence. Windows containing a near-warning keyword are
+// emitted first, so when the section is truncated to maxBytes the load-bearing
+// signal is kept. A session whose transcript is unreadable is silently skipped.
+func assistantContextExcerpts(sc submissionContext, maxBytes int) string {
+	type window struct {
+		text    string
+		flagged bool
+	}
+	var windows []window
+	for i := range sc.Sessions {
+		session := sc.Sessions[i]
+		if session.TranscriptPath == "" {
+			continue
+		}
+		raw, err := brainstore.ReadRelativeFile(sc.BrainDir, session.TranscriptPath)
+		if err != nil {
+			continue
+		}
+		turns := brainstore.ExtractConversationTurns(raw)
+		header := "### session " + session.SessionID
+		if !session.CreatedAt.IsZero() {
+			header += " @" + session.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		for j := range turns {
+			if turns[j].Role != "assistant" {
+				continue
+			}
+			var w strings.Builder
+			w.WriteString(header)
+			w.WriteString("\n")
+			if j > 0 && turns[j-1].Role == "user" {
+				w.WriteString("- [human] " + flattenTurn(turns[j-1].Text, 400) + "\n")
+			}
+			w.WriteString("- [assistant] " + flattenTurn(turns[j].Text, 900) + "\n")
+			if j+1 < len(turns) && turns[j+1].Role == "user" {
+				w.WriteString("- [human→] " + flattenTurn(turns[j+1].Text, 400) + "\n")
+			}
+			windows = append(windows, window{text: w.String(), flagged: containsIntegrityKeyword(turns[j].Text)})
+		}
+	}
+	if len(windows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	// Two passes: near-warning windows first, then the rest, so truncation drops
+	// ordinary chatter before it drops a warning.
+	for _, wantFlagged := range []bool{true, false} {
+		for _, w := range windows {
+			if w.flagged != wantFlagged {
+				continue
+			}
+			if b.Len()+len(w.text) > maxBytes {
+				b.WriteString("... (assistant context truncated)\n")
+				return b.String()
+			}
+			b.WriteString(w.text)
+		}
+	}
+	return b.String()
+}
+
+// flattenTurn collapses a turn's whitespace onto one line and caps its length.
+func flattenTurn(text string, max int) string {
+	return truncateString(strings.Join(strings.Fields(text), " "), max)
 }
 
 // loadTemplate loads the system prompt for a named lens template, stripping its
@@ -333,7 +479,7 @@ func parseLensOutput(out, lensName string) LensResult {
 	}
 	// A scored LLM lens that parsed but produced no usable score is surfaced as a
 	// warning so the run is marked degraded rather than silently unscored.
-	if result.Score == nil && (lensName == LensOutcome || lensName == LensPrompting) {
+	if result.Score == nil && (lensName == LensOutcome || lensName == LensPrompting || lensName == LensIntegrity) {
 		result.Warnings = append(result.Warnings, "lens output contained no usable score")
 	}
 	result.Verdict = strings.TrimSpace(raw.Verdict)

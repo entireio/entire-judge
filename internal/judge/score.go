@@ -14,8 +14,9 @@ var lensDisplayRank = map[string]int{
 	LensAuthenticity: 0,
 	LensPrompting:    1,
 	LensEffort:       2,
-	LensOutcome:      3,
-	LensAgent:        4,
+	LensIntegrity:    3,
+	LensOutcome:      4,
+	LensAgent:        5,
 }
 
 func lensRankOf(name string) int {
@@ -139,8 +140,9 @@ func agentLeverageLens(m Metrics) LensResult {
 	}
 }
 
-// compositeAndFlags computes the weighted composite over the four scored lenses
-// (agent_leverage excluded) and surfaces hard-gate flags. Degenerate timeline
+// compositeAndFlags computes the weighted composite over the five scored lenses
+// (authenticity, prompting_skill, effort_consistency, integrity, idea_plan_execution;
+// agent_leverage excluded) and surfaces hard-gate flags. Degenerate timeline
 // categories are flagged so the jury sees them rather than a silently averaged
 // number.
 func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
@@ -195,14 +197,57 @@ func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
 }
 
 // processLenses are the "how they worked" component (Grade A): the deterministic
-// timeline/effort signals plus the LLM prompting-skill read. solutionLenses are
-// the "what they built" component (Grade B).
-var processLenses = []string{LensAuthenticity, LensPrompting, LensEffort}
+// timeline/effort signals, the LLM prompting-skill read, and the LLM integrity
+// read (a low integrity score drags Grade A — and thus the composite — down). The
+// solution component (Grade B) is idea_plan_execution.
+var processLenses = []string{LensAuthenticity, LensPrompting, LensEffort, LensIntegrity}
+
+// IntegrityFlagThreshold is the integrity score at or below which a validated
+// integrity lens raises the red flag on a submission.
+const IntegrityFlagThreshold = 2.0
+
+// DeriveIntegrityFlag reports whether a submission's integrity lens raises the red
+// flag: a REAL integrity warning exists in the brain (integritySignal — an assistant
+// transcript turn carrying an integrity keyword) AND the lens is present,
+// evidence-supported (>=1 validated anchor), and scored at or below
+// IntegrityFlagThreshold — the signature of the assistant warning about a
+// substantive integrity/validity problem the team then proceeded past. The signal
+// gate prevents a false positive: an LLM that hallucinates a low score and cites any
+// real session id would otherwise flag a clean team. It returns the reason (the lens
+// verdict, else its first bullet) with the first evidence anchor appended, for
+// prominent surfacing. A missing signal or a missing/unsupported/high-scoring
+// integrity lens yields (false, "").
+func DeriveIntegrityFlag(lenses []LensResult, integritySignal bool) (bool, string) {
+	if !integritySignal {
+		return false, ""
+	}
+	for i := range lenses {
+		l := lenses[i]
+		if l.Lens != LensIntegrity {
+			continue
+		}
+		if l.Score == nil || !l.Supported || *l.Score > IntegrityFlagThreshold {
+			return false, ""
+		}
+		reason := strings.TrimSpace(l.Verdict)
+		if reason == "" && len(l.Bullets) > 0 {
+			reason = strings.TrimSpace(l.Bullets[0])
+		}
+		if reason == "" {
+			reason = "assistant raised an unaddressed integrity concern"
+		}
+		if len(l.Evidence) > 0 {
+			reason += " @" + strings.TrimSpace(l.Evidence[0])
+		}
+		return true, reason
+	}
+	return false, ""
+}
 
 // Grades computes the two component grades and their combined total from a
 // submission's scored lenses, in the spirit of a multi-component score (technical
 // + presentation): Grade A (process) is the mean of the supported process lenses
-// (authenticity, prompting_skill, effort_consistency); Grade B (solution) is the
+// (authenticity, prompting_skill, effort_consistency, integrity); Grade B (solution) is the
 // supported idea_plan_execution score. Combined is the mean of whichever grades
 // are present, so the two components count equally regardless of how many lenses
 // feed each. A nil grade means no supported lens fed it.

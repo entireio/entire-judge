@@ -76,6 +76,11 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	// 3. idea_plan_execution — LLM-scored.
 	report.Lenses = append(report.Lenses, runScoredLens(ctx, sc, LensOutcome, templateOutcome, params, run, &llmFailures))
 
+	// 3b. integrity — LLM-scored; JOINS Grade A. A low integrity score (the
+	//     assistant warned about a substantive integrity/validity problem and the
+	//     team proceeded without addressing it) drags the composite down.
+	report.Lenses = append(report.Lenses, runScoredLens(ctx, sc, LensIntegrity, templateIntegrity, params, run, &llmFailures))
+
 	// 4. effort_consistency — DETERMINISTIC.
 	report.Lenses = append(report.Lenses, effortLens(sc.Metrics))
 
@@ -99,6 +104,8 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	OrderLenses(report.Lenses)
 	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics)
 	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses)
+	report.IntegritySignal = sc.IntegritySignal
+	report.IntegrityFlag, report.IntegrityReason = DeriveIntegrityFlag(report.Lenses, report.IntegritySignal)
 	return report, nil
 }
 
@@ -135,6 +142,7 @@ func assembleSubmissionContext(ctx context.Context, runner gitutil.CommandRunner
 	sc.Metrics = metrics
 	sc.Coverage = coverage
 
+	sc.IntegritySignal = hasAssistantIntegritySignal(sc)
 	sc.Brief = buildBrief(sc)
 	return sc, nil
 }
@@ -175,7 +183,7 @@ func mergeLLMBullets(det *LensResult, llm LensResult, sc submissionContext) {
 // folded into the hash as an empty body rather than failing.
 func PromptFingerprint(agentName, model, effort string) string {
 	h := sha256.New()
-	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome} {
+	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome, templateIntegrity} {
 		body, _ := loadTemplate(name)
 		fmt.Fprintf(h, "%s\x00%s\x00", name, body)
 	}

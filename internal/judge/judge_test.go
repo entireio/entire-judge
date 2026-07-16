@@ -3,6 +3,7 @@ package judge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,6 +195,11 @@ func TestParseLensOutputLenient(t *testing.T) {
 		{name: "outcome subs win over score", lens: LensOutcome, input: `{"score":1,"idea":5,"plan":5,"execution":5}`, wantScore: f(5), wantComps: 3},
 		{name: "outcome no score no subs", lens: LensOutcome, input: `{"verdict":"x","bullets":["a"]}`, wantNil: true, wantBullet: 1, wantWarn: true},
 		{name: "non-outcome ignores stray subs", lens: LensPrompting, input: `{"score":4,"idea":1,"plan":1,"execution":1}`, wantScore: f(4), wantComps: 0},
+		// integrity lens: single-score shape (like prompting), LOW = bad
+		{name: "integrity low score", lens: LensIntegrity, input: `{"score":1,"verdict":"assistant warned of test-set contamination; team proceeded","bullets":["a"],"evidence":["s1"]}`, wantScore: f(1), wantBullet: 1},
+		{name: "integrity clean high score", lens: LensIntegrity, input: `{"score":5,"verdict":"no concerns","bullets":[],"evidence":["s1"]}`, wantScore: f(5)},
+		{name: "integrity no score warns", lens: LensIntegrity, input: `{"verdict":"unclear","bullets":["a"]}`, wantNil: true, wantBullet: 1, wantWarn: true},
+		{name: "integrity ignores stray subs", lens: LensIntegrity, input: `{"score":2,"idea":5,"plan":5,"execution":5}`, wantScore: f(2), wantComps: 0},
 		// a non-scored lens (authenticity/effort/agent) must NOT get the no-score warning
 		{name: "non-scored lens gets no warning", lens: LensAuthenticity, input: `{"verdict":"x","bullets":["a"]}`, wantNil: true, wantBullet: 1},
 	}
@@ -501,7 +507,7 @@ func TestSubmissionIDFromKey(t *testing.T) {
 }
 
 func TestTemplatesLoad(t *testing.T) {
-	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome, templateSummary} {
+	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome, templateIntegrity, templateSummary} {
 		body, err := loadTemplate(name)
 		if err != nil {
 			t.Fatalf("loadTemplate(%q): %v", name, err)
@@ -575,6 +581,289 @@ func TestSubmitDeterministicPopulatesAndDegradesLLM(t *testing.T) {
 	}
 }
 
+// contaminationTranscript is a synthetic claude-shape transcript where the
+// assistant EXPLICITLY warns that the retrieval pool is contaminated with test-set
+// samples and the team proceeds anyway — the exact incident the integrity lens
+// exists to surface.
+const contaminationTranscript = `{"type":"user","message":{"role":"user","content":"build a retrieval system and evaluate it on the benchmark"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Warning: your retrieval pool is contaminated with test-set samples. Evaluating on this is invalid and the results would be illegal for the competition. Remove the held-out test rows before you proceed."}]}}
+{"type":"user","message":{"role":"user","content":"just proceed anyway, we do not have time to fix it"}}`
+
+const cleanTranscript = `{"type":"user","message":{"role":"user","content":"build a retrieval system and evaluate it on the benchmark"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The pipeline looks correct and the train and eval splits are kept separate. Consider adding a couple more unit tests for the ranker."}]}}
+{"type":"user","message":{"role":"user","content":"great, added the tests"}}`
+
+// cannedRunner returns the same lens JSON for every agent call (all lenses and the
+// summary), letting a Submit test assert flag/grade wiring deterministically.
+func cannedRunner(json string) agent.Runner {
+	return func(ctx context.Context, dir string, args []string, input []byte, timeout time.Duration) (string, error) {
+		return json, nil
+	}
+}
+
+// gradeAFromLenses recomputes the expected Grade A (process) mean over the SUPPORTED
+// process lenses actually present in a report, and reports whether integrity is
+// among them — the assertion that the integrity lens joined Grade A.
+func gradeAFromLenses(t *testing.T, lenses []LensResult) (mean float64, hasIntegrity bool) {
+	t.Helper()
+	supported := map[string]float64{}
+	for _, l := range lenses {
+		if l.Score != nil && l.Supported {
+			supported[l.Lens] = *l.Score
+		}
+	}
+	var sum float64
+	var n int
+	for _, name := range processLenses {
+		if v, ok := supported[name]; ok {
+			sum += v
+			n++
+			if name == LensIntegrity {
+				hasIntegrity = true
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no supported process lenses")
+	}
+	return sum / float64(n), hasIntegrity
+}
+
+func TestBriefIncludesAssistantIntegrityContext(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", Agent: "claude-code", CreatedAt: now.Add(-time.Hour), CheckpointsCount: 2, TranscriptPath: "sessions/main/s1.jsonl"},
+	}
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": contaminationTranscript})
+	runner := fakeRunner{gitLog: gitLogRecord("c0ffee1234567", "", now.Add(-90*time.Minute).Format(time.RFC3339), "dev", "dev@x.com", "init")}
+
+	sc, err := assembleSubmissionContext(context.Background(), runner, t.TempDir(), brainDir, "gh/team/proj", now.Add(-2*time.Hour))
+	if err != nil {
+		t.Fatalf("assembleSubmissionContext: %v", err)
+	}
+	for _, want := range []string{"integrity context", "[assistant]", "contaminated with test-set", "proceed anyway"} {
+		if !strings.Contains(sc.Brief, want) {
+			t.Errorf("brief missing %q:\n%s", want, sc.Brief)
+		}
+	}
+}
+
+// writeFactsFixture lays down a branch facts.ndjson with n filler facts so a test
+// can push the facts section toward its budget cap.
+func writeFactsFixture(t *testing.T, brainDir, branch string, n int, text string) {
+	t.Helper()
+	dir := filepath.Join(brainDir, "facts", filepath.FromSlash(branch))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		rec := brainstore.FactRecord{
+			ID:    fmt.Sprintf("f%d", i),
+			Kind:  "decision",
+			Paths: []string{"pkg/a.go"},
+			Text:  fmt.Sprintf("fact %d: %s", i, text),
+		}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(data)
+		b.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "facts.ndjson"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBriefReservesIntegritySectionUnderBudget is the BUG #1 regression: a brain
+// whose facts + human prompts alone blow past contextMaxBytes must still keep the
+// integrity (assistant-context) section — it may never be the section the tail
+// truncate sacrifices. Fails (integrity chopped) if the buildBrief reserve is
+// reverted.
+func TestBriefReservesIntegritySectionUnderBudget(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", Agent: "claude-code", CreatedAt: now.Add(-time.Hour), CheckpointsCount: 2, TranscriptPath: "sessions/main/s1.jsonl"},
+	}
+	filler := strings.Repeat("lorem ipsum dolor sit amet consectetur ", 20) // ~780 bytes
+	// Many large human prompts to saturate the human-excerpt budget, then the
+	// assistant contamination warning at the tail.
+	var tb strings.Builder
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&tb, "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":%q}}\n", fmt.Sprintf("prompt %d %s", i, filler))
+	}
+	tb.WriteString(contaminationTranscript)
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": tb.String()})
+	// A large facts store to consume ~half the context budget.
+	writeFactsFixture(t, brainDir, "main", 300, filler)
+
+	runner := fakeRunner{gitLog: gitLogRecord("c0ffee1234567", "", now.Add(-90*time.Minute).Format(time.RFC3339), "dev", "dev@x.com", "init")}
+	sc, err := assembleSubmissionContext(context.Background(), runner, t.TempDir(), brainDir, "gh/team/proj", now.Add(-2*time.Hour))
+	if err != nil {
+		t.Fatalf("assembleSubmissionContext: %v", err)
+	}
+	if len(sc.Brief) > contextMaxBytes {
+		t.Fatalf("brief exceeds contextMaxBytes: %d > %d", len(sc.Brief), contextMaxBytes)
+	}
+	// Sanity: the budget pressure is real (facts and human excerpts are present).
+	if !strings.Contains(sc.Brief, "Durable facts") || !strings.Contains(sc.Brief, "Human prompts") {
+		t.Fatalf("expected facts + human-prompt sections to exercise the budget:\n%.200s", sc.Brief)
+	}
+	for _, want := range []string{"integrity context", "contaminated"} {
+		if !strings.Contains(sc.Brief, want) {
+			t.Fatalf("brief missing %q under budget pressure (len=%d); the integrity section was sacrificed by tail truncation", want, len(sc.Brief))
+		}
+	}
+}
+
+func TestSubmitRaisesIntegrityFlagOnContamination(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", Agent: "claude-code", CreatedAt: now.Add(-time.Hour), CheckpointsCount: 4, FilesTouched: []string{"a.go"}, TranscriptPath: "sessions/main/s1.jsonl"},
+	}
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": contaminationTranscript})
+	runner := fakeRunner{gitLog: gitLogRecord("deadbeef00000", "", now.Add(-80*time.Minute).Format(time.RFC3339), "dev", "dev@x.com", "init")}
+
+	// The lens agent returns a low integrity score with a VALID anchor (session s1).
+	canned := `{"score":1,"verdict":"assistant warned of test-set contamination; team proceeded without addressing it","bullets":["proceeded anyway"],"evidence":["s1"]}`
+	report, err := Submit(context.Background(), runner, cannedRunner(canned), t.TempDir(), brainDir, "gh/team/proj", Params{Agent: "claude-code", HackathonStart: now.Add(-2 * time.Hour)}, now)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if !report.IntegrityFlag {
+		t.Fatalf("IntegrityFlag = false, want true (integrity score 1 with a valid anchor)")
+	}
+	if !strings.Contains(report.IntegrityReason, "contamination") || !strings.Contains(report.IntegrityReason, "@s1") {
+		t.Errorf("IntegrityReason = %q, want the verdict plus @s1 anchor", report.IntegrityReason)
+	}
+	// The integrity lens must be present, supported, scored — and folded into Grade A.
+	mean, hasIntegrity := gradeAFromLenses(t, report.Lenses)
+	if !hasIntegrity {
+		t.Fatal("integrity lens not among the supported Grade A (process) lenses")
+	}
+	if report.GradeProcess == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	if diff := *report.GradeProcess - mean; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("GradeProcess = %.4f, want %.4f (mean of supported process lenses incl. integrity)", *report.GradeProcess, mean)
+	}
+	// JSON exposes the flag + reason.
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"integrity_flag":true`) || !strings.Contains(string(data), `"integrity_reason"`) {
+		t.Errorf("emitted JSON missing integrity_flag/integrity_reason:\n%s", data)
+	}
+}
+
+func TestSubmitNoIntegrityFlagWhenClean(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", Agent: "claude-code", CreatedAt: now.Add(-time.Hour), CheckpointsCount: 4, FilesTouched: []string{"a.go"}, TranscriptPath: "sessions/main/s1.jsonl"},
+	}
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": cleanTranscript})
+	runner := fakeRunner{gitLog: gitLogRecord("deadbeef00000", "", now.Add(-80*time.Minute).Format(time.RFC3339), "dev", "dev@x.com", "init")}
+
+	// No warning raised: the integrity lens scores high with a valid anchor.
+	canned := `{"score":5,"verdict":"no integrity concerns raised","bullets":["clean splits"],"evidence":["s1"]}`
+	report, err := Submit(context.Background(), runner, cannedRunner(canned), t.TempDir(), brainDir, "gh/team/proj", Params{Agent: "claude-code", HackathonStart: now.Add(-2 * time.Hour)}, now)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if report.IntegrityFlag {
+		t.Errorf("IntegrityFlag = true, want false (integrity score 5)")
+	}
+	if report.IntegrityReason != "" {
+		t.Errorf("IntegrityReason = %q, want empty when not flagged", report.IntegrityReason)
+	}
+	// The high integrity score still joins Grade A.
+	if _, hasIntegrity := gradeAFromLenses(t, report.Lenses); !hasIntegrity {
+		t.Error("integrity lens should still feed Grade A even when not flagged")
+	}
+}
+
+// TestSubmitNoIntegrityFlagWithoutWarningSignal is the BUG #2 regression: a CLEAN
+// transcript (no assistant integrity warning) must NOT raise the flag even when the
+// LLM hallucinates a low integrity score citing a valid, resolvable anchor. Only the
+// FLAG is gated — the lens still scores and stays Supported. Fails (false positive)
+// if the DeriveIntegrityFlag signal gate is reverted.
+func TestSubmitNoIntegrityFlagWithoutWarningSignal(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", Agent: "claude-code", CreatedAt: now.Add(-time.Hour), CheckpointsCount: 4, FilesTouched: []string{"a.go"}, TranscriptPath: "sessions/main/s1.jsonl"},
+	}
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": cleanTranscript})
+	runner := fakeRunner{gitLog: gitLogRecord("deadbeef00000", "", now.Add(-80*time.Minute).Format(time.RFC3339), "dev", "dev@x.com", "init")}
+
+	// The LLM HALLUCINATES a low integrity score citing a VALID anchor (session s1),
+	// but no assistant warning exists in the transcript — the flag must NOT fire.
+	canned := `{"score":1,"verdict":"claims test-set contamination","bullets":["fabricated concern"],"evidence":["s1"]}`
+	report, err := Submit(context.Background(), runner, cannedRunner(canned), t.TempDir(), brainDir, "gh/team/proj", Params{Agent: "claude-code", HackathonStart: now.Add(-2 * time.Hour)}, now)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if report.IntegritySignal {
+		t.Fatal("IntegritySignal = true, want false for a clean transcript (no assistant integrity keyword)")
+	}
+	if report.IntegrityFlag {
+		t.Fatalf("IntegrityFlag = true, want false: no assistant integrity warning in the brain (false positive)")
+	}
+	if report.IntegrityReason != "" {
+		t.Errorf("IntegrityReason = %q, want empty when not flagged", report.IntegrityReason)
+	}
+	// The lens score / Supported behavior must be UNCHANGED — only the flag is gated.
+	var found bool
+	for _, l := range report.Lenses {
+		if l.Lens != LensIntegrity {
+			continue
+		}
+		found = true
+		if l.Score == nil || *l.Score != 1 {
+			t.Errorf("integrity score = %v, want 1 (score unchanged by the flag gate)", l.Score)
+		}
+		if !l.Supported {
+			t.Error("integrity lens should still be Supported (anchor s1 resolves); only the flag is gated")
+		}
+	}
+	if !found {
+		t.Fatal("integrity lens missing from report")
+	}
+}
+
+func TestDeriveIntegrityFlag(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	cases := []struct {
+		name     string
+		lenses   []LensResult
+		wantFlag bool
+	}{
+		{"low + supported flags", []LensResult{{Lens: LensIntegrity, Score: s(1), Supported: true, Verdict: "warned", Evidence: []string{"s1"}}}, true},
+		{"at threshold flags", []LensResult{{Lens: LensIntegrity, Score: s(2), Supported: true, Evidence: []string{"s1"}}}, true},
+		{"above threshold no flag", []LensResult{{Lens: LensIntegrity, Score: s(2.5), Supported: true, Evidence: []string{"s1"}}}, false},
+		{"low but unsupported no flag", []LensResult{{Lens: LensIntegrity, Score: s(1), Supported: false, Evidence: []string{"s1"}}}, false},
+		{"missing lens no flag", []LensResult{{Lens: LensPrompting, Score: s(1), Supported: true}}, false},
+		{"nil score no flag", []LensResult{{Lens: LensIntegrity, Supported: true}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// signal=true isolates the lens-based gating this table exercises; the
+			// signal gate itself is covered by TestSubmitNoIntegrityFlagWithoutWarningSignal.
+			got, reason := DeriveIntegrityFlag(tc.lenses, true)
+			if got != tc.wantFlag {
+				t.Errorf("DeriveIntegrityFlag flag = %v, want %v", got, tc.wantFlag)
+			}
+			if got && reason == "" {
+				t.Error("flagged result must carry a non-empty reason")
+			}
+			if !got && reason != "" {
+				t.Errorf("unflagged result must have empty reason, got %q", reason)
+			}
+		})
+	}
+}
+
 func TestGrades(t *testing.T) {
 	s := func(v float64) *float64 { return &v }
 	lens := func(name string, score float64, supported bool) LensResult {
@@ -596,6 +885,11 @@ func TestGrades(t *testing.T) {
 			name:   "both grades present",
 			lenses: []LensResult{lens(LensAuthenticity, 4, true), lens(LensPrompting, 5, true), lens(LensEffort, 3, true), lens(LensOutcome, 5, true)},
 			wantP:  s(4), wantS: s(5), wantC: s(4.5), // process mean(4,5,3)=4, solution 5, combined 4.5
+		},
+		{
+			name:   "integrity joins grade A and drags it down",
+			lenses: []LensResult{lens(LensAuthenticity, 4, true), lens(LensPrompting, 5, true), lens(LensEffort, 3, true), lens(LensIntegrity, 0, true), lens(LensOutcome, 5, true)},
+			wantP:  s(3), wantS: s(5), wantC: s(4), // process mean(4,5,3,0)=3, solution 5, combined 4
 		},
 		{
 			name:   "only process (outcome unsupported -> solution nil, combined = process)",

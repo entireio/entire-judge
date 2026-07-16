@@ -16,6 +16,7 @@ var lensComponent = map[string]string{
 	judge.LensAuthenticity: "A · process",
 	judge.LensPrompting:    "A · process",
 	judge.LensEffort:       "A · process",
+	judge.LensIntegrity:    "A · process",
 	judge.LensOutcome:      "B · solution",
 }
 
@@ -98,6 +99,20 @@ func renderDetail(th Theme, r *judge.RunReport, meta judge.RunMetadata, excluded
 		b.WriteString(th.dimStyle().Render("Grade A · process  ") + gradeStr(process) +
 			th.dimStyle().Render("    Grade B · solution  ") + gradeStr(solution))
 		b.WriteString("\n\n")
+
+		// Integrity red-flag banner: the assistant warned about a substantive
+		// integrity/validity problem and the team proceeded without addressing it.
+		// Surfaced prominently; the submission still ranks (the jury decides).
+		if r.IntegrityFlag {
+			banner := lipgloss.NewStyle().Foreground(th.Bad).Bold(true).Render("⚠ INTEGRITY FLAG")
+			b.WriteString(banner)
+			b.WriteString("\n")
+			if reason := strings.TrimSpace(r.IntegrityReason); reason != "" {
+				b.WriteString(wrap.Render(lipgloss.NewStyle().Foreground(th.Bad).Render(reason)))
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	// ---- Score ----

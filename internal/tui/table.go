@@ -88,11 +88,15 @@ func submissionRows(reports []judge.RunReport, section int) []table.Row {
 		} else {
 			score = "gate"
 		}
-		// Trailing mark: medal for the top 3, else a flag marker. The medal wins
-		// for a flagged top-3 submission; the detail view lists the flags anyway.
+		// Trailing mark: an integrity red flag wins over everything (it is the most
+		// important signal), then the medal for the top 3, then a generic flag
+		// marker. The detail view lists the flags and the integrity reason anyway.
 		mark := medalGlyph
 		if mark == "" && len(r.Flags) > 0 {
 			mark = "⚑"
+		}
+		if r.IntegrityFlag {
+			mark = "⚠"
 		}
 		rows = append(rows, table.Row{centerCell(rank), r.SubmissionID, score, mark})
 	}
