@@ -295,27 +295,35 @@ func humanPromptExcerpts(sc submissionContext, maxBytes int) string {
 
 // integrityKeywords are phrases that denote an actual integrity or validity
 // VIOLATION — test-set contamination, train/test leakage, evaluating on / training
-// on the test data, overfitting the holdout, leaderboard cheating, memorized/seen
-// examples, fabricated/plagiarized results, rules violations, or hardcoded
-// benchmark answers. They corroborate the integrity red flag via
-// integritySignalForLens — which scopes the scan to the SESSIONS THE LENS CITED —
-// AND prioritize which assistant-turn windows survive truncation. Because the
-// scan is anchor-scoped (not brain-wide), the list is broadened for recall: a real
-// warning phrased in any of these ways trips it. Bare, high-collision stems that
-// match ordinary coding chatter are still EXCLUDED: "leak" (vs "leakage"),
-// "invalid" (vs "invalid results"), "evaluat", "cheat" (vs "leaderboard"),
-// "integrity", "test-set" (bare — appears in benign "92% on the test-set"),
-// "training data", "ground truth". Substrings, matched case-insensitively.
+// on the test data, overfitting the holdout, cheating, memorized/seen examples,
+// fabricated/plagiarized results, rules violations, or hardcoded benchmark answers.
+// They corroborate the integrity red flag via integritySignalForLens — which scopes
+// the scan to the SESSIONS THE LENS CITED — AND prioritize which assistant-turn
+// windows survive truncation.
+//
+// This list is an ADVISORY BACKSTOP only, scoped to the cited session's transcript;
+// it never gates a verdict on its own. The LLM integrity-lens score plus a validated
+// evidence anchor are the PRIMARY gates (see DeriveIntegrityFlag / Grades) — the
+// keyword scan merely corroborates. As a case-insensitive substring matcher it has an
+// irreducible false-positive/false-negative floor, so it is precision-tuned rather
+// than exhaustive: entries are specific phrases, and bare high-collision stems that
+// fire on ordinary ML/coding chatter are deliberately EXCLUDED even at some recall
+// cost — "leak" (vs "leakage"), "invalid" (vs "invalid results"), "evaluat", "cheat"
+// (vs "cheating", which does not match "cheat sheet"), "trained on" (vs "trained on
+// the test" — a backbone "trained on ImageNet" is benign), "overfit" (vs "holdout"),
+// "leaderboard", "violates the", "integrity", "test-set" (bare — appears in benign
+// "92% on the test-set"), "training data", "ground truth". Substrings, matched
+// case-insensitively.
 var integrityKeywords = []string{
 	"contaminated with", "test set samples",
 	"leakage", "train/test", "train / test", "trained on the test",
-	"trained on", "same data",
+	"same data",
 	"evaluating on the training", "results are invalid", "invalid results",
 	"illegal for the competition", "against the rules", "competition rules",
-	"violates the", "hardcoded the", "hard-coded the",
+	"hardcoded the", "hard-coded the",
 	"fabricat", "plagiari", "disqualif",
 	"held-out test", "held out test", "holdout", "hold-out",
-	"leaderboard", "memoriz", "saw these", "overfit",
+	"memoriz", "saw these", "cheating",
 }
 
 func containsIntegrityKeyword(s string) bool {
