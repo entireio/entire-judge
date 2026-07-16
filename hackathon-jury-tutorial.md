@@ -4,13 +4,13 @@ This is a practical runbook for a hackathon jury that wants to use Entire to
 score submitted repositories. The short version:
 
 1. Install the Entire CLI.
-2. Install three plugins: `entire-sem`, `entire-brain`, and `entire-judge`.
+2. Install three plugins: `entire-graph`, `entire-brain`, and `entire-judge`.
 3. Clone each submission and fetch its Entire checkpoint history.
 4. Build a full brain for each submission.
 5. Run `entire judge rank` to produce an advisory jury board.
 
 The main jury-facing tool is `entire judge`. It depends on a local
-`entire brain` for each submission, and the brain uses `entire-sem` to add a
+`entire brain` for each submission, and the brain uses `entire-graph` to add a
 semantic "what was built" layer when the semantic provider is installed.
 
 ## What Each Piece Does
@@ -18,14 +18,14 @@ semantic "what was built" layer when the semantic provider is installed.
 `entire` is the base CLI. Teams use it during the hackathon so their AI coding
 sessions, prompts, checkpoints, and commit links are captured.
 
-`entire-sem` is the semantic provider. It parses the code and emits symbols,
+`entire-graph` is the semantic provider. It parses the code and emits symbols,
 routes, workflow sections, tool handlers, imports, calls, and related local code
 facts. The jury does not usually run it directly; `entire brain refresh` invokes
 it.
 
 `entire-brain` builds a local, inspectable brain for one repository. It exports
 Entire session history, builds local history/docs indexes, and records semantic
-snapshots from `entire-sem`.
+snapshots from `entire-graph`.
 
 `entire-judge` reads each submission repo plus its local brain, then produces
 deterministic metrics and optional LLM-scored judge lenses. It can score one repo
@@ -99,16 +99,16 @@ Note: these are the current repository URLs. After the repos move into the
 mkdir -p ~/entire-jury-tools
 cd ~/entire-jury-tools
 
-git clone https://github.com/suhaanthayyil/entire-sem.git
-cd entire-sem
+git clone https://github.com/entireio/entire-graph.git
+cd entire-graph
 mise install
 mise run check
 mise run build
-entire plugin install ./entire-sem --force
-entire sem version
+entire plugin install ./entire-graph --force
+entire graph version
 
 cd ..
-git clone https://github.com/ashtom/entire-brain.git
+git clone https://github.com/entireio/entire-brain.git
 cd entire-brain
 mise install
 mise run check
@@ -117,7 +117,7 @@ entire plugin install ./entire-brain --force
 entire brain --help
 
 cd ..
-git clone https://github.com/suhaanthayyil/entire-judge.git
+git clone https://github.com/entireio/entire-judge.git
 cd entire-judge
 mise install
 mise run check
@@ -130,19 +130,19 @@ Check that Entire can see the plugins:
 
 ```sh
 entire plugin list
-entire sem doctor --json
+entire graph doctor --json
 entire brain --help
 entire judge rank --help
 ```
 
-The `entire sem doctor --json` output should include `"provider":"entire-sem"`
+The `entire graph doctor --json` output should include `"provider":"entire-graph"`
 and `"no_egress":true`.
 
 ## Check The Judge Agent
 
 `entire judge` can always run the deterministic lenses, but the
-`prompting_skill`, `idea_plan_execution`, and generated `summary` fields need a
-judge agent. If you plan to use Claude Code, make sure the same terminal that
+`prompting_skill`, `idea_plan_execution`, `integrity`, and generated `summary`
+fields need a judge agent. If you plan to use Claude Code, make sure the same terminal that
 runs `entire judge` can see a logged-in `claude` binary:
 
 ```sh
@@ -176,8 +176,8 @@ Alternative Go install path, once the repositories are public and the jury
 machine has access to them:
 
 ```sh
-go install github.com/suhaanthayyil/entire-sem/cmd/entire-sem@latest
-entire plugin install "$(go env GOPATH)/bin/entire-sem" --force
+go install github.com/entireio/entire-graph/cmd/entire-graph@latest
+entire plugin install "$(go env GOPATH)/bin/entire-graph" --force
 
 go install github.com/ashtom/entire-brain/cmd/entire-brain@latest
 entire plugin install "$(go env GOPATH)/bin/entire-brain" --force
@@ -225,7 +225,7 @@ Repeat for every team. `entire judge add` clones the repository and fetches
 This tutorial uses `--build=false` on purpose. The built-in `judge add` build
 step creates the session export, but the best scoring path is to run a full
 `entire brain refresh` afterward so the brain also includes the semantic layer
-from `entire-sem`.
+from `entire-graph`.
 
 If you already cloned submissions yourself, fetch checkpoint history manually:
 
@@ -265,7 +265,7 @@ done
 
 `--agent none` keeps brain building deterministic and token-free. The refresh
 still exports sessions, builds local history/docs indexes, and runs
-`entire sem` to add semantic context when the provider is installed.
+`entire graph` to add semantic context when the provider is installed.
 If this step fails with missing session history, do not continue to ranking; fetch
 the team's Entire checkpoint refs or checkpoint remote first.
 
@@ -284,11 +284,11 @@ In the status output, look for:
 - No unsafe semantic freshness warning
 - Any parse warnings or blind spots that jurors should know about
 
-If the semantic section is missing, verify `entire-sem` is installed:
+If the semantic section is missing, verify `entire-graph` is installed:
 
 ```sh
-entire sem version
-entire sem doctor --json
+entire graph version
+entire graph doctor --json
 cd "$SUBMISSIONS/team-a_project"
 entire brain refresh --force --agent none
 ```
@@ -324,7 +324,7 @@ jq -e '.kind == "entire_judge_submission"
 
 Open the saved JSON and also check:
 
-- `deterministic.semantic_symbols` is greater than zero when `entire-sem`
+- `deterministic.semantic_symbols` is greater than zero when `entire-graph`
   indexed the repo
 
 If `entire brain refresh` fails with missing session history, fix checkpoint
@@ -437,8 +437,9 @@ presentation in judged sports): two component grades, each 0–5, then their
 equal-weighted mean as the **Combined** total that orders the board.
 
 - **Grade A — Process** (how they worked): the mean of the supported process
-  lenses — `authenticity`, `prompting_skill`, and `effort_consistency`. (A lens
-  with no resolvable evidence is dropped from the mean, not counted as zero.)
+  lenses — `authenticity`, `prompting_skill`, `effort_consistency`, and
+  `integrity`. A low `integrity` score drags this grade down. (A lens with no
+  resolvable evidence is dropped from the mean, not counted as zero.)
 - **Grade B — Solution** (what they built): the `idea_plan_execution` lens.
 - **Combined** = the equal-weighted mean of whichever grades are present; if no
   judge agent is available (no-egress or the agent is down), Grade B (Solution) is
@@ -452,11 +453,18 @@ The lenses behind the grades:
   `--started-at`.
 - `prompting_skill` (Process): LLM-scored from human prompt excerpts.
 - `effort_consistency` (Process): deterministic session/turn/file activity.
+- `integrity` (Process): LLM-scored (0–5, low is bad). Detects when the assistant
+  explicitly warned about a substantive integrity or validity problem — test-set
+  contamination, train/test leakage, evaluating on training data, cheating,
+  fabricated or hardcoded results, plagiarism, or a stated rules violation — and
+  the team proceeded without addressing it. Ordinary code-review nits are not
+  integrity concerns. A low, evidence-backed score raises an advisory red flag (see
+  below).
 - `idea_plan_execution` (Solution): LLM-scored as three sub-scores — `idea`,
   `plan`, and `execution` — averaged into the lens score. Three fractional
   sub-components (each 0–5) instead of one whole number let close submissions
   separate rather than clustering on the same integer. The `execution` sub-score
-  weighs the `entire-sem` semantic layer ("what was built") heavily. idea, plan,
+  weighs the `entire-graph` semantic layer ("what was built") heavily. idea, plan,
   and execution appear as their own `(B · solution)` bars on the detail page and in
   `judge run --plain`, and as the lens `components` array in `--json`.
 - `agent_leverage`: descriptive, not scored and not part of any grade.
@@ -469,6 +477,26 @@ the brain is insufficient (e.g. a team that did not set up Entire correctly). It
 lens scores, including the LLM solution grade computed from its code, are still
 recorded and viewable on its detail page, but it is not ranked and not averaged
 into the ordering. Jurors should still review excluded entries by hand.
+
+### Integrity red flags
+
+The `integrity` lens can raise an advisory **red flag** — a banner on the detail
+page, an `integrity_flag` / `integrity_reason` pair in `--json`, and a
+`⚠ INTEGRITY FLAG: <reason> @<anchor>` line in `--plain`. The flag fires only when
+the lens is evidence-supported (at least one validated anchor), scores ≤ 2.0, and
+the brain actually contains an assistant turn with an integrity-warning keyword, so
+a hallucinated low score cannot brand a clean team.
+
+A red flag is **advisory, not a gate**. Unlike the timeline/history exclusions
+above, a flagged submission stays in the ranked table with its normal score; it is
+never auto-excluded. The jury decides what to do with it.
+
+For example, one team's assistant warned mid-session that their retrieval and
+evaluation pool was contaminated with test-set samples, so any accuracy numbers
+would be invalid, and the team proceeded to demo those numbers anyway. The
+`integrity` lens scores low, anchors the warning to the session where it appeared,
+and raises the red flag — but the submission still ranks, and jurors weigh the flag
+against the rest of the evidence.
 
 ## Recommended Event Workflow
 
@@ -523,8 +551,8 @@ Semantic data is missing
 Check the provider and rebuild:
 
 ```sh
-entire sem version
-entire sem doctor --json
+entire graph version
+entire graph doctor --json
 cd "$SUBMISSIONS/team-a_project"
 entire brain refresh --force --agent none
 entire brain status

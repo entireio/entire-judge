@@ -47,7 +47,7 @@ entire judge version
 ## Install From Source
 
 ```sh
-git clone https://github.com/suhaanthayyil/entire-judge.git
+git clone https://github.com/entireio/entire-judge.git
 cd entire-judge
 mise run build
 entire plugin install ./entire-judge --force
@@ -67,9 +67,9 @@ entire judge add https://github.com/team/project --dir ./submissions
 entire judge rank ./submissions --started-at <event-start>
 ```
 
-## entire-sem (the execution signal)
+## entire-graph (the execution signal)
 
-`entire judge` reads the brain directly; it does **not** call entire-sem. But when
+`entire judge` reads the brain directly; it does **not** call entire-graph. But when
 a brain was built with the sem provider (`entire brain refresh` records a
 `sources.semantic` layer), the judge reads that snapshot straight from the brain
 and feeds a "What was built" digest (symbol kinds, capabilities, busiest files)
@@ -105,10 +105,19 @@ lenses.
 - **idea_plan_execution** — LLM-scored as three sub-scores — **idea**, **plan**,
   and **execution** (each 0–5, fractional) — averaged into the lens score, so close
   submissions separate instead of clustering on one integer. When the brain carries
-  an **entire-sem** layer (see below), the brief includes a "What was built"
+  an **entire-graph** layer (see below), the brief includes a "What was built"
   code-structure section so the `execution` sub-score weighs what the team actually
   built (symbol kinds, routes/tools/workflows, busiest files) against what they
   planned. The sub-scores are emitted as the lens `components` array.
+- **integrity** — LLM-scored (0–5, where a *low* score is bad). Detects when the
+  coding assistant **explicitly warned** about a substantive integrity or validity
+  problem — test-set contamination, train/test leakage, evaluating on training
+  data, cheating, fabricated or hardcoded results, plagiarism, or a stated rules
+  violation — and the team **proceeded without addressing it**. Ordinary
+  code-review nits and style suggestions are **not** integrity concerns. Evidence
+  bullets are anchored to real session ids, timestamps, or commit hashes like the
+  other LLM lenses. A low score raises a prominent advisory **red flag** (see
+  Output).
 - **effort_consistency** — deterministic. Rewards sustained, multi-session work
   over a single burst.
 - **agent_leverage** — descriptive (unscored). Which agents the team leaned on.
@@ -116,7 +125,8 @@ lenses.
 The headline score is built like a multi-component score (technical + presentation
 in judged sports): two component grades, each 0–5, then their equal-weighted mean.
 **Grade A (process)** is the mean of the supported process lenses — `authenticity`,
-`prompting_skill`, and `effort_consistency`. **Grade B (solution)** is the
+`prompting_skill`, `effort_consistency`, and `integrity`; a low `integrity` score
+drags the composite down. **Grade B (solution)** is the
 `idea_plan_execution` lens. The **composite** is the equal-weighted mean of
 whichever of {Grade A, Grade B} are present — so a submission scored with no judge
 agent still gets a Combined equal to its Process grade. A lens with no resolvable
@@ -140,13 +150,22 @@ against the brain (a real session id, session timestamp, commit hash, or a
 repo-relative file path present in the submission); unresolvable anchors are
 dropped, and a lens with zero valid anchors is excluded from the composite.
 
+The **integrity red flag** is guarded the same way: it fires only when the
+`integrity` lens is evidence-supported (≥1 validated anchor), scores ≤ 2.0, **and**
+the brain actually contains an assistant turn carrying an integrity-warning
+keyword. A hallucinated low score alone cannot brand a clean team.
+
 ### Ranking
 
 `rank` discovers every brain one level under a directory, scores each, and orders
 them by composite. Submissions caught by a **hard gate** (predates the event, no
 session history, or an insufficient brain) are listed separately and **not**
 averaged into the ordered table. A fairness footer states which lenses are
-deterministic versus LLM-scored.
+deterministic versus LLM-scored. An **integrity red flag** is different: it is
+**advisory only**. A flagged submission still appears in the ranked table and is
+never auto-excluded — the jury decides. This is unlike the hard gates
+(`predates_event`, `no_session_history`, insufficient brain), which *are* removed
+from the ordering.
 
 ## No Egress
 
@@ -160,9 +179,12 @@ off-host); use `--agent ollama`, which is pinned to a loopback-only endpoint.
 - `--json` emits the machine-readable report (per-submission or ranking),
   including each lens's `components` (the outcome lens's idea/plan/execution
   sub-scores) and the `grade_process` / `grade_solution` / `composite` totals.
+  When the integrity red flag fires it also carries an `integrity_flag` boolean and
+  an `integrity_reason` string.
 - `--plain` emits a rendered text summary with score bars (and the summary line);
   the per-submission report shows Grade A / Grade B / Combined and the outcome
-  lens's idea/plan/execution sub-scores.
+  lens's idea/plan/execution sub-scores. A fired integrity flag adds a
+  `⚠ INTEGRITY FLAG: <reason> @<anchor>` line.
 - Without either, on a TTY the `run`/`rank`/`watch` commands open the interactive
   **dashboard**; on a non-TTY they fall back to the rendered text summary.
 
@@ -173,8 +195,10 @@ and a per-repo **page** on the right with three sections — **Score** (the
 **Combined** total with its **Grade A / Grade B** components and per-lens bars,
 including the outcome lens's idea/plan/execution sub-scores), **Summary**, and
 **Findings** (the deterministic metrics plus each lens's bullets and evidence
-anchors). Hard-gated submissions live in a separate **Excluded** tab so the jury
-sees them with their gate reason.
+anchors). When the integrity red flag fires, the detail view shows a prominent
+**banner** with its reason. Hard-gated submissions live in a separate **Excluded**
+tab so the jury sees them with their gate reason; an integrity-flagged submission
+is *not* excluded — it stays in the ranked table with its banner.
 
 - Navigate: `↑/↓` or `j/k` move the selection (the page follows); `enter`/`→`
   focuses the page to scroll it; `esc`/`←` returns to the list.
