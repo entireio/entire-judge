@@ -125,8 +125,11 @@ lenses.
 The headline score is built like a multi-component score (technical + presentation
 in judged sports): two component grades, each 0–5, then their equal-weighted mean.
 **Grade A (process)** is the mean of the supported process lenses — `authenticity`,
-`prompting_skill`, `effort_consistency`, and `integrity`; a low `integrity` score
-drags the composite down. **Grade B (solution)** is the
+`prompting_skill`, `effort_consistency`, and — **penalty-only** — `integrity`.
+`integrity` feeds Grade A *only* when it is a genuine flagged concern (the same
+condition that raises the red flag: a real assistant warning, evidence-supported,
+score ≤ 2.0), so it can drag the grade down but a clean `integrity` read never
+inflates it. **Grade B (solution)** is the
 `idea_plan_execution` lens. The **composite** is the equal-weighted mean of
 whichever of {Grade A, Grade B} are present — so a submission scored with no judge
 agent still gets a Combined equal to its Process grade. A lens with no resolvable

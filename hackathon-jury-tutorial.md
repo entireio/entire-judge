@@ -437,9 +437,11 @@ presentation in judged sports): two component grades, each 0–5, then their
 equal-weighted mean as the **Combined** total that orders the board.
 
 - **Grade A — Process** (how they worked): the mean of the supported process
-  lenses — `authenticity`, `prompting_skill`, `effort_consistency`, and
-  `integrity`. A low `integrity` score drags this grade down. (A lens with no
-  resolvable evidence is dropped from the mean, not counted as zero.)
+  lenses — `authenticity`, `prompting_skill`, `effort_consistency`, and —
+  **penalty-only** — `integrity`. `integrity` counts toward this grade *only*
+  when it is a genuine flagged concern (real assistant warning, evidence-supported,
+  score ≤ 2.0), so it can drag the grade down but a clean read never raises it.
+  (A lens with no resolvable evidence is dropped from the mean, not counted as zero.)
 - **Grade B — Solution** (what they built): the `idea_plan_execution` lens.
 - **Combined** = the equal-weighted mean of whichever grades are present; if no
   judge agent is available (no-egress or the agent is down), Grade B (Solution) is
