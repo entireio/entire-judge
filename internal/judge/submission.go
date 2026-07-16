@@ -76,9 +76,11 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	// 3. idea_plan_execution — LLM-scored.
 	report.Lenses = append(report.Lenses, runScoredLens(ctx, sc, LensOutcome, templateOutcome, params, run, &llmFailures))
 
-	// 3b. integrity — LLM-scored; JOINS Grade A. A low integrity score (the
-	//     assistant warned about a substantive integrity/validity problem and the
-	//     team proceeded without addressing it) drags the composite down.
+	// 3b. integrity — LLM-scored; joins Grade A PENALTY-ONLY (see Grades): it counts
+	//     toward the process mean only when it is a genuine, evidence-backed concern
+	//     (the assistant warned about a substantive integrity/validity problem and the
+	//     team proceeded without addressing it), in which case its low score drags the
+	//     composite down. A clean or hallucinated integrity read is excluded.
 	report.Lenses = append(report.Lenses, runScoredLens(ctx, sc, LensIntegrity, templateIntegrity, params, run, &llmFailures))
 
 	// 4. effort_consistency — DETERMINISTIC.
@@ -102,8 +104,8 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	}
 
 	OrderLenses(report.Lenses)
-	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics)
-	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses)
+	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics, sc.IntegritySignal)
+	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses, sc.IntegritySignal)
 	report.IntegritySignal = sc.IntegritySignal
 	report.IntegrityFlag, report.IntegrityReason = DeriveIntegrityFlag(report.Lenses, report.IntegritySignal)
 	return report, nil

@@ -292,7 +292,7 @@ func scoreCheckouts(checkouts []string, jobs int, scoreOne func(checkout string)
 func applyGrades(reports []judge.RunReport) {
 	for i := range reports {
 		judge.OrderLenses(reports[i].Lenses)
-		reports[i].GradeProcess, reports[i].GradeSolution, reports[i].Composite = judge.Grades(reports[i].Lenses)
+		reports[i].GradeProcess, reports[i].GradeSolution, reports[i].Composite = judge.Grades(reports[i].Lenses, reports[i].IntegritySignal)
 		reports[i].IntegrityFlag, reports[i].IntegrityReason = judge.DeriveIntegrityFlag(reports[i].Lenses, reports[i].IntegritySignal)
 	}
 }
@@ -522,7 +522,7 @@ func openSavedBoard(cmd *cobra.Command, flags runFlags, path string) error {
 
 	var single judge.RunReport
 	if err := json.Unmarshal(data, &single); err == nil && single.Kind == "entire_judge_submission" {
-		single.GradeProcess, single.GradeSolution, single.Composite = judge.Grades(single.Lenses)
+		single.GradeProcess, single.GradeSolution, single.Composite = judge.Grades(single.Lenses, single.IntegritySignal)
 		single.IntegrityFlag, single.IntegrityReason = judge.DeriveIntegrityFlag(single.Lenses, single.IntegritySignal)
 		return runTUI(cmd, []judge.RunReport{single}, nil, resolveTheme(flags.theme), single.Run)
 	}

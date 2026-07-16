@@ -22,6 +22,10 @@ const (
 	excerptMaxBytes = 64 * 1024
 	// assistantCtxMaxBytes bounds the assistant-turn integrity-context section.
 	assistantCtxMaxBytes = 32 * 1024
+	// semanticMaxBytes bounds the entire-sem digest section so an unbounded
+	// ByKind/ByLanguage/TopFiles join cannot dominate the base and crowd out the
+	// integrity section.
+	semanticMaxBytes = contextMaxBytes / 2
 	// LensTimeout is the default per-lens agent timeout.
 	LensTimeout = 5 * time.Minute
 
@@ -83,16 +87,18 @@ func buildBrief(sc submissionContext) string {
 	}
 
 	if sec := semanticSummarySection(sc.Semantic); sec != "" {
-		b.WriteString(sec)
+		b.WriteString(truncateString(sec, semanticMaxBytes))
 	}
 
 	// The integrity (assistant-context) section carries the load-bearing warning
 	// signal, so it must NEVER be the section a tail-truncate sacrifices on a large
-	// submission. Build it first and RESERVE room for it: the human-prompt excerpts
-	// then get only the budget left after the base sections and this section (plus a
-	// small safety margin), capped at excerptMaxBytes and floored at 0. This keeps
-	// the total under contextMaxBytes by construction, so the integrity section —
-	// appended last for readable order — always survives intact.
+	// submission. Build it first, then keep it intact BY CONSTRUCTION: the
+	// human-prompt excerpts get only the budget left after the base sections and this
+	// section (the existing reserve), and — critically — the already-built base is
+	// itself bounded to contextMaxBytes-len(integritySection) before the integrity
+	// section is appended. That handles the case the reserve alone cannot: a base of
+	// facts + a large semantic layer that on its own exceeds the budget. The final
+	// safety truncate below is therefore a no-op for the integrity section.
 	var integritySection string
 	if ctx := assistantContextExcerpts(sc, assistantCtxMaxBytes); ctx != "" {
 		integritySection = "\n## Assistant messages & adjacent human turns (integrity context)\n\n" + ctx
@@ -111,6 +117,18 @@ func buildBrief(sc submissionContext) string {
 	}
 
 	if integritySection != "" {
+		// Bound the base so appending the integrity section cannot overflow the cap:
+		// truncate the base to contextMaxBytes-len(integritySection) (floor 0) first,
+		// THEN append. len(base)+len(integritySection) <= contextMaxBytes by
+		// construction, guaranteeing the integrity section survives the final truncate.
+		if base := b.String(); len(base)+len(integritySection) > contextMaxBytes {
+			baseCap := contextMaxBytes - len(integritySection)
+			if baseCap < 0 {
+				baseCap = 0
+			}
+			b.Reset()
+			b.WriteString(truncateString(base, baseCap))
+		}
 		b.WriteString(integritySection)
 	}
 
@@ -245,15 +263,22 @@ func humanPromptExcerpts(sc submissionContext, maxBytes int) string {
 	return b.String()
 }
 
-// integrityKeywords are the near-warning cues used ONLY to prioritize which
-// assistant-turn windows survive truncation of the integrity-context section (the
-// LLM does the actual judging). Substrings, matched case-insensitively.
+// integrityKeywords are HIGH-PRECISION phrases that denote an actual integrity or
+// validity VIOLATION — test-set contamination, train/test leakage, evaluating on
+// training data, fabricated/plagiarized results, rules violations, or hardcoded
+// benchmark answers. They gate the integrity red flag (hasAssistantIntegritySignal)
+// AND prioritize which assistant-turn windows survive truncation. This is a backstop
+// against LLM hallucination — the lens template is the real judge — so the list is
+// deliberately curated for precision over recall: bare stems like "leak", "invalid",
+// "evaluat", "cheat", "integrity", "training data" or "ground truth" match ordinary
+// coding chatter and are EXCLUDED. Substrings, matched case-insensitively.
 var integrityKeywords = []string{
-	"contaminat", "test set", "test-set", "train/test", "train test", "leak",
-	"overfit", "cheat", "plagiar", "fabricat", "hardcod", "hard-cod", "hard cod",
-	"invalid", "illegal", "against the rules", "rules violation", "held-out",
-	"held out", "training data", "ground truth", "evaluat", "not allowed",
-	"integrity", "disqualif",
+	"contaminated with", "test-set", "test set samples",
+	"leakage", "train/test", "train / test", "trained on the test",
+	"evaluating on the training", "results are invalid", "invalid results",
+	"illegal for the competition", "against the rules", "competition rules",
+	"violates the", "hardcoded the", "hard-coded the",
+	"fabricat", "plagiari", "disqualif", "held-out test", "held out test",
 }
 
 func containsIntegrityKeyword(s string) bool {

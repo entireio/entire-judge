@@ -357,7 +357,7 @@ func TestCompositeExcludesUnsupportedLLMLens(t *testing.T) {
 		{Lens: LensEffort, Score: score(5), Supported: true},
 		{Lens: LensAgent, Supported: true},
 	}
-	composite, flags := compositeAndFlags(lenses, Metrics{TimelineCategory: TimelineCleanStart})
+	composite, flags := compositeAndFlags(lenses, Metrics{TimelineCategory: TimelineCleanStart}, false)
 	if composite == nil {
 		t.Fatal("composite nil; deterministic lenses keep it computable")
 	}
@@ -602,10 +602,13 @@ func cannedRunner(json string) agent.Runner {
 }
 
 // gradeAFromLenses recomputes the expected Grade A (process) mean over the SUPPORTED
-// process lenses actually present in a report, and reports whether integrity is
-// among them — the assertion that the integrity lens joined Grade A.
-func gradeAFromLenses(t *testing.T, lenses []LensResult) (mean float64, hasIntegrity bool) {
+// process lenses actually present in a report, mirroring the penalty-only rule:
+// integrity is counted only when it meets the penalty condition
+// (integrityIsPenalty), otherwise it is excluded. It reports whether integrity was
+// counted — the assertion that the integrity lens joined Grade A.
+func gradeAFromLenses(t *testing.T, lenses []LensResult, integritySignal bool) (mean float64, hasIntegrity bool) {
 	t.Helper()
+	integrityPenalty := integrityIsPenalty(lenses, integritySignal)
 	supported := map[string]float64{}
 	for _, l := range lenses {
 		if l.Score != nil && l.Supported {
@@ -615,6 +618,9 @@ func gradeAFromLenses(t *testing.T, lenses []LensResult) (mean float64, hasInteg
 	var sum float64
 	var n int
 	for _, name := range processLenses {
+		if name == LensIntegrity && !integrityPenalty {
+			continue
+		}
 		if v, ok := supported[name]; ok {
 			sum += v
 			n++
@@ -717,6 +723,114 @@ func TestBriefReservesIntegritySectionUnderBudget(t *testing.T) {
 	}
 }
 
+// TestIntegritySignalKeywordPrecision is the BUG HIGH-1 regression: the integrity
+// signal gate must be high-precision. Ordinary coding chatter that merely shares a
+// stem with an integrity term must NOT trip it (else the hallucination backstop is a
+// no-op), while phrasings a real contamination/leakage/cheating/rules warning uses
+// MUST trip it. Fails if integrityKeywords is reverted to bare stems.
+func TestIntegritySignalKeywordPrecision(t *testing.T) {
+	benign := []string{
+		"we should fix this memory leak",
+		"let me re-evaluate the expression",
+		"this will invalidate the cache",
+		"here is the test setup for the parser",
+		"don't hardcode the path",
+		"grab a cheat sheet for the API",
+		"this protects data integrity of the DB",
+		"catch the IllegalStateException",
+		"wire up the training data loader",
+		"the ground truth labels look fine",
+		"add an invalid-input unit test",
+	}
+	violations := []string{
+		"your retrieval pool is contaminated with test-set samples",
+		"you are evaluating on the training data, results are invalid",
+		"this is train/test leakage",
+		"these results would be illegal for the competition",
+		"you hardcoded the benchmark answers",
+		"that fabricates the eval numbers",
+		"this violates the competition rules",
+	}
+	for _, s := range benign {
+		if containsIntegrityKeyword(s) {
+			t.Errorf("benign turn tripped the integrity signal (false positive): %q", s)
+		}
+	}
+	for _, s := range violations {
+		if !containsIntegrityKeyword(s) {
+			t.Errorf("violation warning did NOT trip the integrity signal (false negative): %q", s)
+		}
+	}
+}
+
+// TestBriefKeepsIntegritySectionWithLargeFactsAndSemantic is the BUG HIGH-2
+// regression: a base of facts + a large semantic layer that on its own exceeds
+// contextMaxBytes must not evict the integrity section via the final tail-truncate.
+// The base-bounding in buildBrief must keep the integrity marker and warning text
+// intact. Fails if the base-bounding is reverted (integrity chopped off the tail).
+func TestBriefKeepsIntegritySectionWithLargeFactsAndSemantic(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", Agent: "claude-code", CreatedAt: now.Add(-time.Hour), CheckpointsCount: 2, TranscriptPath: "sessions/main/s1.jsonl"},
+	}
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": contaminationTranscript})
+
+	// A large facts slice: each line caps at 600 bytes; the section caps at
+	// contextMaxBytes/2, so this saturates the facts budget (~48KB).
+	factText := strings.Repeat("durable decision detail ", 40) // ~960 bytes -> truncated to 600
+	var facts []brainstore.FactRecord
+	for i := 0; i < 200; i++ {
+		facts = append(facts, brainstore.FactRecord{
+			ID:    fmt.Sprintf("f%d", i),
+			Kind:  "decision",
+			Paths: []string{"pkg/a.go"},
+			Text:  factText,
+		})
+	}
+
+	// A large semantic layer: thousands of ByKind/TopFiles entries so the joined
+	// label line dwarfs contextMaxBytes and forces the semantic cap to bind. Base
+	// (facts + semantic) alone therefore exceeds contextMaxBytes.
+	var byKind, topFiles []brainstore.LabelCount
+	for i := 0; i < 3000; i++ {
+		byKind = append(byKind, brainstore.LabelCount{Label: fmt.Sprintf("symbol_kind_label_%06d", i), Count: i})
+		topFiles = append(topFiles, brainstore.LabelCount{Label: fmt.Sprintf("pkg/module/file_%06d.go", i), Count: i})
+	}
+	semantic := &brainstore.SemanticSummary{
+		Symbols:   9000,
+		Relations: 4000,
+		Files:     3000,
+		ByKind:    byKind,
+		TopFiles:  topFiles,
+	}
+
+	sc := submissionContext{
+		BrainDir: brainDir,
+		Sessions: sessions,
+		Facts:    facts,
+		Semantic: semantic,
+		Metrics:  Metrics{TimelineCategory: TimelineCleanStart},
+	}
+	sc.Brief = buildBrief(sc)
+
+	// Sanity: the base sections really are big enough to blow the budget on their own.
+	if len(semanticSummarySection(sc.Semantic)) <= semanticMaxBytes {
+		t.Fatalf("test precondition weak: semantic section (%d) must exceed the cap (%d)", len(semanticSummarySection(sc.Semantic)), semanticMaxBytes)
+	}
+	if len(sc.Brief) > contextMaxBytes {
+		t.Fatalf("brief exceeds contextMaxBytes: %d > %d", len(sc.Brief), contextMaxBytes)
+	}
+	for _, want := range []string{"integrity context", "contaminated"} {
+		if !strings.Contains(sc.Brief, want) {
+			t.Fatalf("brief missing %q with a large facts+semantic base (len=%d); the integrity section was sacrificed by tail truncation", want, len(sc.Brief))
+		}
+	}
+	// Sanity: the base sections are actually present (this is a real large-base case).
+	if !strings.Contains(sc.Brief, "Durable facts") || !strings.Contains(sc.Brief, "What was built") {
+		t.Fatalf("expected facts + semantic sections to exercise the base budget:\n%.200s", sc.Brief)
+	}
+}
+
 func TestSubmitRaisesIntegrityFlagOnContamination(t *testing.T) {
 	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
 	sessions := []brainstore.Session{
@@ -737,8 +851,9 @@ func TestSubmitRaisesIntegrityFlagOnContamination(t *testing.T) {
 	if !strings.Contains(report.IntegrityReason, "contamination") || !strings.Contains(report.IntegrityReason, "@s1") {
 		t.Errorf("IntegrityReason = %q, want the verdict plus @s1 anchor", report.IntegrityReason)
 	}
-	// The integrity lens must be present, supported, scored — and folded into Grade A.
-	mean, hasIntegrity := gradeAFromLenses(t, report.Lenses)
+	// The integrity lens must be present, supported, scored — and (penalty condition
+	// met: low score + real assistant warning) folded into Grade A.
+	mean, hasIntegrity := gradeAFromLenses(t, report.Lenses, report.IntegritySignal)
 	if !hasIntegrity {
 		t.Fatal("integrity lens not among the supported Grade A (process) lenses")
 	}
@@ -778,9 +893,18 @@ func TestSubmitNoIntegrityFlagWhenClean(t *testing.T) {
 	if report.IntegrityReason != "" {
 		t.Errorf("IntegrityReason = %q, want empty when not flagged", report.IntegrityReason)
 	}
-	// The high integrity score still joins Grade A.
-	if _, hasIntegrity := gradeAFromLenses(t, report.Lenses); !hasIntegrity {
-		t.Error("integrity lens should still feed Grade A even when not flagged")
+	// Penalty-only rule: a clean (high-score) integrity lens is EXCLUDED from Grade A,
+	// so it never inflates the process grade — even though it stays a scored,
+	// Supported lens. Grade A equals the mean of the other supported process lenses.
+	mean, hasIntegrity := gradeAFromLenses(t, report.Lenses, report.IntegritySignal)
+	if hasIntegrity {
+		t.Error("clean high-score integrity must NOT feed Grade A (penalty-only)")
+	}
+	if report.GradeProcess == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	if diff := *report.GradeProcess - mean; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("GradeProcess = %.4f, want %.4f (clean integrity excluded)", *report.GradeProcess, mean)
 	}
 }
 
@@ -914,10 +1038,126 @@ func TestGrades(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, sol, c := Grades(tc.lenses)
+			// signal=true so the "integrity joins grade A" case exercises the penalty
+			// path; the non-integrity cases are unaffected by the signal.
+			p, sol, c := Grades(tc.lenses, true)
 			if !eq(p, tc.wantP) || !eq(sol, tc.wantS) || !eq(c, tc.wantC) {
 				t.Errorf("Grades() = (%v, %v, %v), want (%v, %v, %v)", p, sol, c, tc.wantP, tc.wantS, tc.wantC)
 			}
 		})
+	}
+}
+
+// TestGradeAExcludesCleanIntegrity: a clean, high-scoring integrity lens (even with
+// the signal present, since a high score fails the penalty gate) is EXCLUDED from
+// Grade A, so it cannot inflate the process grade. Grade A is the mean of the other
+// three supported process lenses. Fails (integrity folded in at 5) if the
+// penalty-gate is reverted.
+func TestGradeAExcludesCleanIntegrity(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	lenses := []LensResult{
+		{Lens: LensAuthenticity, Score: s(4), Supported: true},
+		{Lens: LensPrompting, Score: s(3), Supported: true},
+		{Lens: LensEffort, Score: s(2), Supported: true},
+		{Lens: LensIntegrity, Score: s(5), Supported: true, Evidence: []string{"s1"}},
+	}
+	p, _, _ := Grades(lenses, true)
+	if p == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	want := (4.0 + 3.0 + 2.0) / 3.0
+	if diff := *p - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("GradeProcess = %.4f, want %.4f (clean integrity excluded)", *p, want)
+	}
+	if flag, _ := DeriveIntegrityFlag(lenses, true); flag {
+		t.Error("clean high-score integrity must not raise the red flag")
+	}
+}
+
+// TestGradeAIncludesFlaggedIntegrity: a supported low integrity score WITH a real
+// assistant warning (signal) meets the penalty condition, so it is folded into Grade
+// A and drags it down (mean of all four). The companion assertion — the same lens
+// set WITHOUT the signal excludes integrity — makes this fail if the penalty-gate is
+// reverted (revert would fold integrity in regardless of signal).
+func TestGradeAIncludesFlaggedIntegrity(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	lenses := []LensResult{
+		{Lens: LensAuthenticity, Score: s(4), Supported: true},
+		{Lens: LensPrompting, Score: s(3), Supported: true},
+		{Lens: LensEffort, Score: s(2), Supported: true},
+		{Lens: LensIntegrity, Score: s(1), Supported: true, Verdict: "warned", Evidence: []string{"s1"}},
+	}
+	p, _, _ := Grades(lenses, true)
+	if p == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	wantWith := (4.0 + 3.0 + 2.0 + 1.0) / 4.0
+	if diff := *p - wantWith; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("GradeProcess (signal) = %.4f, want %.4f (flagged integrity dragged in)", *p, wantWith)
+	}
+	if flag, _ := DeriveIntegrityFlag(lenses, true); !flag {
+		t.Error("flagged low integrity must raise the red flag")
+	}
+	// Same lenses, no signal: integrity is excluded (penalty gate keys off the signal).
+	pNoSignal, _, _ := Grades(lenses, false)
+	if pNoSignal == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	wantWithout := (4.0 + 3.0 + 2.0) / 3.0
+	if diff := *pNoSignal - wantWithout; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("GradeProcess (no signal) = %.4f, want %.4f (integrity excluded without signal)", *pNoSignal, wantWithout)
+	}
+}
+
+// TestGradeAExcludesHallucinatedLowIntegrity: a supported LOW integrity score but NO
+// assistant warning (signal false) is a hallucinated concern — it must NOT drag Grade
+// A and must NOT raise the flag. Fails (integrity folded in at 1) if the penalty-gate
+// is reverted.
+func TestGradeAExcludesHallucinatedLowIntegrity(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	lenses := []LensResult{
+		{Lens: LensAuthenticity, Score: s(4), Supported: true},
+		{Lens: LensPrompting, Score: s(3), Supported: true},
+		{Lens: LensEffort, Score: s(2), Supported: true},
+		{Lens: LensIntegrity, Score: s(1), Supported: true, Evidence: []string{"s1"}},
+	}
+	p, _, _ := Grades(lenses, false)
+	if p == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	want := (4.0 + 3.0 + 2.0) / 3.0
+	if diff := *p - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("GradeProcess = %.4f, want %.4f (hallucinated low integrity excluded)", *p, want)
+	}
+	if flag, _ := DeriveIntegrityFlag(lenses, false); flag {
+		t.Error("hallucinated low integrity (no signal) must not raise the red flag")
+	}
+}
+
+// TestGradeADeterministicAcrossAnchorLuck: two teams identical except one's clean
+// integrity lens resolved its anchor (Supported, score 5) and the other's did not
+// (unsupported) — Grade A must be identical, because a clean integrity read is
+// excluded either way. Fails (grades diverge: 3.5 vs 3.0) if the penalty-gate is
+// reverted, since revert would fold the resolved 5 into Grade A.
+func TestGradeADeterministicAcrossAnchorLuck(t *testing.T) {
+	s := func(v float64) *float64 { return &v }
+	base := []LensResult{
+		{Lens: LensAuthenticity, Score: s(4), Supported: true},
+		{Lens: LensPrompting, Score: s(3), Supported: true},
+		{Lens: LensEffort, Score: s(2), Supported: true},
+	}
+	withAnchor := append(append([]LensResult{}, base...), LensResult{Lens: LensIntegrity, Score: s(5), Supported: true, Evidence: []string{"s1"}})
+	withoutAnchor := append(append([]LensResult{}, base...), LensResult{Lens: LensIntegrity, Score: s(5), Supported: false})
+	pa, _, _ := Grades(withAnchor, false)
+	pb, _, _ := Grades(withoutAnchor, false)
+	if pa == nil || pb == nil {
+		t.Fatal("GradeProcess nil")
+	}
+	if diff := *pa - *pb; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("Grade A differs by anchor luck: %.4f vs %.4f", *pa, *pb)
+	}
+	want := (4.0 + 3.0 + 2.0) / 3.0
+	if diff := *pa - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("Grade A = %.4f, want %.4f (clean integrity excluded)", *pa, want)
 	}
 }

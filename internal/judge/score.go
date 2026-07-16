@@ -145,7 +145,7 @@ func agentLeverageLens(m Metrics) LensResult {
 // agent_leverage excluded) and surfaces hard-gate flags. Degenerate timeline
 // categories are flagged so the jury sees them rather than a silently averaged
 // number.
-func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
+func compositeAndFlags(lenses []LensResult, m Metrics, integritySignal bool) (*float64, []string) {
 	// Only evidence-backed lens scores count toward the composite. An LLM lens
 	// that returned a score but whose evidence anchors did not resolve against
 	// the brain (Supported == false) is excluded rather than allowed to move the
@@ -192,42 +192,64 @@ func compositeAndFlags(lenses []LensResult, m Metrics) (*float64, []string) {
 	// The composite is the combined total of the two component grades, the single
 	// source of truth for the score (Grades returns nil when no supported lens fed
 	// a grade — i.e. a brain too thin to score).
-	_, _, combined := Grades(lenses)
+	_, _, combined := Grades(lenses, integritySignal)
 	return combined, flags
 }
 
 // processLenses are the "how they worked" component (Grade A): the deterministic
-// timeline/effort signals, the LLM prompting-skill read, and the LLM integrity
-// read (a low integrity score drags Grade A — and thus the composite — down). The
-// solution component (Grade B) is idea_plan_execution.
+// timeline/effort signals, the LLM prompting-skill read, and — PENALTY-ONLY — the
+// LLM integrity read. Integrity feeds Grade A only when it is a genuine,
+// evidence-backed concern (integrityIsPenalty: supported, scored <=
+// IntegrityFlagThreshold, and a real assistant warning in the brain); a clean or
+// hallucinated integrity read is excluded entirely so it can neither inflate nor
+// falsely drag the grade. The solution component (Grade B) is idea_plan_execution.
 var processLenses = []string{LensAuthenticity, LensPrompting, LensEffort, LensIntegrity}
 
 // IntegrityFlagThreshold is the integrity score at or below which a validated
 // integrity lens raises the red flag on a submission.
 const IntegrityFlagThreshold = 2.0
 
-// DeriveIntegrityFlag reports whether a submission's integrity lens raises the red
-// flag: a REAL integrity warning exists in the brain (integritySignal — an assistant
-// transcript turn carrying an integrity keyword) AND the lens is present,
-// evidence-supported (>=1 validated anchor), and scored at or below
-// IntegrityFlagThreshold — the signature of the assistant warning about a
-// substantive integrity/validity problem the team then proceeded past. The signal
-// gate prevents a false positive: an LLM that hallucinates a low score and cites any
-// real session id would otherwise flag a clean team. It returns the reason (the lens
-// verdict, else its first bullet) with the first evidence anchor appended, for
-// prominent surfacing. A missing signal or a missing/unsupported/high-scoring
-// integrity lens yields (false, "").
-func DeriveIntegrityFlag(lenses []LensResult, integritySignal bool) (bool, string) {
+// integrityIsPenalty is the SINGLE source of truth for "the integrity lens is a
+// genuine, evidence-backed concern": a REAL assistant integrity warning exists in
+// the brain (integritySignal), AND the integrity lens is present, evidence-supported
+// (>=1 validated anchor), and scored at or below IntegrityFlagThreshold. Both
+// DeriveIntegrityFlag (whether the red flag fires) and Grades (whether integrity
+// feeds the Grade A mean) consult this predicate, so the two can never drift:
+// integrity counts toward Grade A exactly when the red flag fires. A missing signal,
+// or a missing/unsupported/high-scoring integrity lens, yields false.
+func integrityIsPenalty(lenses []LensResult, integritySignal bool) bool {
 	if !integritySignal {
-		return false, ""
+		return false
 	}
 	for i := range lenses {
 		l := lenses[i]
 		if l.Lens != LensIntegrity {
 			continue
 		}
-		if l.Score == nil || !l.Supported || *l.Score > IntegrityFlagThreshold {
-			return false, ""
+		return l.Score != nil && l.Supported && *l.Score <= IntegrityFlagThreshold
+	}
+	return false
+}
+
+// DeriveIntegrityFlag reports whether a submission's integrity lens raises the red
+// flag. It fires under exactly the penalty condition (integrityIsPenalty): a REAL
+// integrity warning exists in the brain (integritySignal — an assistant transcript
+// turn carrying an integrity keyword) AND the lens is present, evidence-supported
+// (>=1 validated anchor), and scored at or below IntegrityFlagThreshold — the
+// signature of the assistant warning about a substantive integrity/validity problem
+// the team then proceeded past. The signal gate prevents a false positive: an LLM
+// that hallucinates a low score and cites any real session id would otherwise flag a
+// clean team. It returns the reason (the lens verdict, else its first bullet) with
+// the first evidence anchor appended, for prominent surfacing. When the penalty
+// condition does not hold it yields (false, "").
+func DeriveIntegrityFlag(lenses []LensResult, integritySignal bool) (bool, string) {
+	if !integrityIsPenalty(lenses, integritySignal) {
+		return false, ""
+	}
+	for i := range lenses {
+		l := lenses[i]
+		if l.Lens != LensIntegrity {
+			continue
 		}
 		reason := strings.TrimSpace(l.Verdict)
 		if reason == "" && len(l.Bullets) > 0 {
@@ -247,11 +269,21 @@ func DeriveIntegrityFlag(lenses []LensResult, integritySignal bool) (bool, strin
 // Grades computes the two component grades and their combined total from a
 // submission's scored lenses, in the spirit of a multi-component score (technical
 // + presentation): Grade A (process) is the mean of the supported process lenses
-// (authenticity, prompting_skill, effort_consistency, integrity); Grade B (solution) is the
-// supported idea_plan_execution score. Combined is the mean of whichever grades
-// are present, so the two components count equally regardless of how many lenses
-// feed each. A nil grade means no supported lens fed it.
-func Grades(lenses []LensResult) (process, solution, combined *float64) {
+// (authenticity, prompting_skill, effort_consistency, and — PENALTY-ONLY —
+// integrity); Grade B (solution) is the supported idea_plan_execution score.
+// Combined is the mean of whichever grades are present, so the two components count
+// equally regardless of how many lenses feed each. A nil grade means no supported
+// lens fed it.
+//
+// Integrity is folded into the Grade A mean ONLY when it meets the penalty condition
+// (integrityIsPenalty(lenses, integritySignal): supported, scored <=
+// IntegrityFlagThreshold, and a real assistant warning present) — i.e. exactly when
+// the integrity red flag fires. A clean/high, unsupported, or unsignalled integrity
+// read is EXCLUDED from the mean entirely (not zeroed), so it can neither inflate
+// Grade A nor let a hallucinated low score drag it down; Grade A is therefore
+// invariant to whether a clean team's integrity anchor happened to resolve.
+func Grades(lenses []LensResult, integritySignal bool) (process, solution, combined *float64) {
+	integrityPenalty := integrityIsPenalty(lenses, integritySignal)
 	supported := map[string]float64{}
 	for _, l := range lenses {
 		if l.Score != nil && l.Supported {
@@ -261,6 +293,11 @@ func Grades(lenses []LensResult) (process, solution, combined *float64) {
 	var psum float64
 	var pn int
 	for _, name := range processLenses {
+		// Integrity contributes to Grade A only as a genuine, evidence-backed
+		// penalty; otherwise it is excluded so it never moves the process grade.
+		if name == LensIntegrity && !integrityPenalty {
+			continue
+		}
 		if v, ok := supported[name]; ok {
 			psum += v
 			pn++
