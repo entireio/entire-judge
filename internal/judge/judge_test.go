@@ -750,6 +750,11 @@ func TestIntegritySignalKeywordPrecision(t *testing.T) {
 		"you hardcoded the benchmark answers",
 		"that fabricates the eval numbers",
 		"this violates the competition rules",
+		// Broadened real-warning phrasings the anchor-scoped signal must now catch.
+		"you're testing on the same data you trained on",
+		"the model already saw these examples during training",
+		"we're overfitting to the holdout",
+		"that's basically cheating for the leaderboard",
 	}
 	for _, s := range benign {
 		if containsIntegrityKeyword(s) {
@@ -760,6 +765,58 @@ func TestIntegritySignalKeywordPrecision(t *testing.T) {
 		if !containsIntegrityKeyword(s) {
 			t.Errorf("violation warning did NOT trip the integrity signal (false negative): %q", s)
 		}
+	}
+}
+
+// TestIntegritySignalScopedToCitedSession is the ANCHOR-SCOPING regression: the
+// corroborating integrity signal must be true ONLY when a session the integrity
+// lens actually cited carries an assistant integrity warning — not when a warning
+// lives in some OTHER, uncited session of the brain. Fails (case a would be TRUE)
+// if the signal is reverted to a brain-wide scan.
+func TestIntegritySignalScopedToCitedSession(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	sessions := []brainstore.Session{
+		{SessionID: "s1", Branch: "main", CreatedAt: now.Add(-2 * time.Hour), TranscriptPath: "sessions/main/s1.jsonl"},
+		{SessionID: "s2", Branch: "main", CreatedAt: now.Add(-time.Hour), TranscriptPath: "sessions/main/s2.jsonl"},
+		{SessionID: "s3", Branch: "main", CreatedAt: now.Add(-30 * time.Minute), TranscriptPath: "sessions/main/s3.jsonl"},
+	}
+	// s1: BENIGN — an assistant turn that literally contains "test-set" but is not a
+	// warning (bare "test-set" is no longer a keyword). s2: a REAL warning. s3: no
+	// integrity keyword at all.
+	benign := `{"type":"assistant","message":{"content":[{"type":"text","text":"Nice, we hit 92% on the test-set and the numbers look solid."}]}}`
+	warning := `{"type":"assistant","message":{"content":[{"type":"text","text":"Careful — you're testing on the same data you trained on; that's basically cheating for the leaderboard."}]}}`
+	noKeyword := `{"type":"assistant","message":{"content":[{"type":"text","text":"Looks good, ship it. Maybe add a README section."}]}}`
+	brainDir := writeBrainFixture(t, now, sessions, map[string]string{"s1": benign, "s2": warning, "s3": noKeyword})
+
+	lens := func(evidence ...string) LensResult {
+		return LensResult{Lens: LensIntegrity, Evidence: evidence}
+	}
+
+	// (a) cites only the benign session -> FALSE. A brain-wide scan would leak s2's
+	// warning and return TRUE, so this guard fails if scoping is reverted.
+	if integritySignalForLens(brainDir, sessions, lens("s1")) {
+		t.Error("case (a): signal TRUE for a cited benign session; brain-wide scan leaked an uncited warning")
+	}
+	// (b) cites the warning session -> TRUE.
+	if !integritySignalForLens(brainDir, sessions, lens("s2")) {
+		t.Error("case (b): signal FALSE for a cited session that carries a real warning")
+	}
+	// (c) cites a session with no integrity keyword -> FALSE.
+	if integritySignalForLens(brainDir, sessions, lens("s3")) {
+		t.Error("case (c): signal TRUE for a cited keyword-free session")
+	}
+	// Resolving by session TIMESTAMP works too (real warning session).
+	if !integritySignalForLens(brainDir, sessions, lens(sessions[1].CreatedAt.UTC().Format(time.RFC3339))) {
+		t.Error("signal FALSE when the warning session is cited by its RFC3339 timestamp")
+	}
+	// No evidence -> FALSE.
+	if integritySignalForLens(brainDir, sessions, lens()) {
+		t.Error("signal TRUE with no evidence anchors")
+	}
+	// A commit-only anchor that maps to no session contributes nothing -> FALSE, even
+	// though s2 holds a warning.
+	if integritySignalForLens(brainDir, sessions, lens("deadbeef1234")) {
+		t.Error("signal TRUE for a commit-only anchor that resolves to no session")
 	}
 }
 

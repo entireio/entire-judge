@@ -104,10 +104,25 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	}
 
 	OrderLenses(report.Lenses)
-	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics, sc.IntegritySignal)
-	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses, sc.IntegritySignal)
-	report.IntegritySignal = sc.IntegritySignal
-	report.IntegrityFlag, report.IntegrityReason = DeriveIntegrityFlag(report.Lenses, report.IntegritySignal)
+
+	// The corroborating integrity signal is ANCHOR-SCOPED: it is computed here, once
+	// the integrity LensResult exists, from the sessions THAT LENS cited as evidence —
+	// true only when a cited session has an assistant turn carrying an integrity
+	// keyword. This replaces the old brain-wide scan, which fired on benign keyword-ish
+	// chatter anywhere in the brain. It is persisted on the report so a reloaded saved
+	// board (transcripts no longer on hand) recomputes the flag from the trusted bool.
+	var integrityLens LensResult
+	for i := range report.Lenses {
+		if report.Lenses[i].Lens == LensIntegrity {
+			integrityLens = report.Lenses[i]
+			break
+		}
+	}
+	integritySignal := integritySignalForLens(brainDir, sc.Sessions, integrityLens)
+	report.IntegritySignal = integritySignal
+	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics, integritySignal)
+	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses, integritySignal)
+	report.IntegrityFlag, report.IntegrityReason = DeriveIntegrityFlag(report.Lenses, integritySignal)
 	return report, nil
 }
 
@@ -144,7 +159,6 @@ func assembleSubmissionContext(ctx context.Context, runner gitutil.CommandRunner
 	sc.Metrics = metrics
 	sc.Coverage = coverage
 
-	sc.IntegritySignal = hasAssistantIntegritySignal(sc)
 	sc.Brief = buildBrief(sc)
 	return sc, nil
 }

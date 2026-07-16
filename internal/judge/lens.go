@@ -50,12 +50,6 @@ type submissionContext struct {
 	Metrics  Metrics
 	Semantic *brainstore.SemanticSummary
 
-	// IntegritySignal is true when at least one ASSISTANT turn in the submission's
-	// transcripts contains an integrity keyword — the REAL brain-side warning that
-	// gates the integrity red flag (see DeriveIntegrityFlag). Without it, an LLM
-	// hallucinating a low integrity score on a clean team must not raise the flag.
-	IntegritySignal bool
-
 	Brief string
 }
 
@@ -139,27 +133,63 @@ func buildBrief(sc submissionContext) string {
 	return out
 }
 
-// hasAssistantIntegritySignal reports whether any ASSISTANT turn across the
-// submission's transcripts contains an integrity keyword — the same near-warning
-// cue assistantContextExcerpts uses to prioritize windows (containsIntegrityKeyword
-// over brainstore.ExtractConversationTurns). It is the REAL brain-side signal that
-// gates the integrity red flag: without an assistant warning the flag must not
-// fire, so an LLM hallucinating a low integrity score on a clean team cannot brand
-// it a cheater.
-func hasAssistantIntegritySignal(sc submissionContext) bool {
-	for i := range sc.Sessions {
-		session := sc.Sessions[i]
-		if session.TranscriptPath == "" {
-			continue
-		}
-		raw, err := brainstore.ReadRelativeFile(sc.BrainDir, session.TranscriptPath)
-		if err != nil {
-			continue
-		}
-		for _, turn := range brainstore.ExtractConversationTurns(raw) {
-			if turn.Role == "assistant" && containsIntegrityKeyword(turn.Text) {
+// integritySignalForLens is the ANCHOR-SCOPED corroborating signal for a real
+// integrity warning: it is true only when a session the integrity lens actually
+// CITED (an evidence anchor that resolves to a session) has an ASSISTANT turn
+// carrying an integrity keyword. Scoping to the cited evidence — rather than
+// scanning every session in the brain — keeps the backstop meaningful in an ML
+// hackathon, where benign keyword-ish chatter ("92% on the test-set",
+// "train/test split") is everywhere: only a warning inside the LENS's own
+// evidence gates the red flag and the Grade-A penalty (see DeriveIntegrityFlag /
+// Grades). A commit-only anchor that maps to no session contributes nothing; no
+// evidence, no anchor resolving to a session, or no keyword-bearing assistant
+// turn in a cited session all yield false.
+func integritySignalForLens(brainDir string, sessions []brainstore.Session, integrity LensResult) bool {
+	for _, anchor := range integrity.Evidence {
+		for i := range sessions {
+			if !anchorResolvesToSession(anchor, sessions[i]) {
+				continue
+			}
+			if sessionHasAssistantIntegritySignal(brainDir, sessions[i]) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// anchorResolvesToSession reports whether an evidence anchor resolves to THIS
+// session, reusing the shared anchorResolves logic with single-session maps (the
+// session's id and its RFC3339 CreatedAt timestamp). Commit hashes and file paths
+// are intentionally not supplied: neither identifies a session, so a commit-only
+// or file-only anchor resolves to no session.
+func anchorResolvesToSession(anchor string, session brainstore.Session) bool {
+	sessionIDs := map[string]struct{}{}
+	if session.SessionID != "" {
+		sessionIDs[strings.ToLower(session.SessionID)] = struct{}{}
+	}
+	sessionTimes := map[string]struct{}{}
+	if !session.CreatedAt.IsZero() {
+		sessionTimes[strings.ToLower(session.CreatedAt.UTC().Format(time.RFC3339))] = struct{}{}
+		sessionTimes[strings.ToLower(session.CreatedAt.UTC().Format(time.RFC3339Nano))] = struct{}{}
+	}
+	return anchorResolves(anchor, sessionIDs, sessionTimes, nil, nil, "")
+}
+
+// sessionHasAssistantIntegritySignal reports whether the session's transcript has
+// an ASSISTANT turn carrying an integrity keyword (containsIntegrityKeyword over
+// brainstore.ExtractConversationTurns). An absent/unreadable transcript yields false.
+func sessionHasAssistantIntegritySignal(brainDir string, session brainstore.Session) bool {
+	if session.TranscriptPath == "" {
+		return false
+	}
+	raw, err := brainstore.ReadRelativeFile(brainDir, session.TranscriptPath)
+	if err != nil {
+		return false
+	}
+	for _, turn := range brainstore.ExtractConversationTurns(raw) {
+		if turn.Role == "assistant" && containsIntegrityKeyword(turn.Text) {
+			return true
 		}
 	}
 	return false
@@ -263,22 +293,29 @@ func humanPromptExcerpts(sc submissionContext, maxBytes int) string {
 	return b.String()
 }
 
-// integrityKeywords are HIGH-PRECISION phrases that denote an actual integrity or
-// validity VIOLATION — test-set contamination, train/test leakage, evaluating on
-// training data, fabricated/plagiarized results, rules violations, or hardcoded
-// benchmark answers. They gate the integrity red flag (hasAssistantIntegritySignal)
-// AND prioritize which assistant-turn windows survive truncation. This is a backstop
-// against LLM hallucination — the lens template is the real judge — so the list is
-// deliberately curated for precision over recall: bare stems like "leak", "invalid",
-// "evaluat", "cheat", "integrity", "training data" or "ground truth" match ordinary
-// coding chatter and are EXCLUDED. Substrings, matched case-insensitively.
+// integrityKeywords are phrases that denote an actual integrity or validity
+// VIOLATION — test-set contamination, train/test leakage, evaluating on / training
+// on the test data, overfitting the holdout, leaderboard cheating, memorized/seen
+// examples, fabricated/plagiarized results, rules violations, or hardcoded
+// benchmark answers. They corroborate the integrity red flag via
+// integritySignalForLens — which scopes the scan to the SESSIONS THE LENS CITED —
+// AND prioritize which assistant-turn windows survive truncation. Because the
+// scan is anchor-scoped (not brain-wide), the list is broadened for recall: a real
+// warning phrased in any of these ways trips it. Bare, high-collision stems that
+// match ordinary coding chatter are still EXCLUDED: "leak" (vs "leakage"),
+// "invalid" (vs "invalid results"), "evaluat", "cheat" (vs "leaderboard"),
+// "integrity", "test-set" (bare — appears in benign "92% on the test-set"),
+// "training data", "ground truth". Substrings, matched case-insensitively.
 var integrityKeywords = []string{
-	"contaminated with", "test-set", "test set samples",
+	"contaminated with", "test set samples",
 	"leakage", "train/test", "train / test", "trained on the test",
+	"trained on", "same data",
 	"evaluating on the training", "results are invalid", "invalid results",
 	"illegal for the competition", "against the rules", "competition rules",
 	"violates the", "hardcoded the", "hard-coded the",
-	"fabricat", "plagiari", "disqualif", "held-out test", "held out test",
+	"fabricat", "plagiari", "disqualif",
+	"held-out test", "held out test", "holdout", "hold-out",
+	"leaderboard", "memoriz", "saw these", "overfit",
 }
 
 func containsIntegrityKeyword(s string) bool {
