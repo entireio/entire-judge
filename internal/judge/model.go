@@ -18,12 +18,14 @@ const (
 	LensPrompting    = "prompting_skill"
 	LensOutcome      = "idea_plan_execution"
 	LensEffort       = "effort_consistency"
+	LensIntegrity    = "integrity"
 	LensAgent        = "agent_leverage"
 
 	// Template basenames for the LLM lenses (differ from the lens names).
 	templateAuthenticity = "authenticity"
 	templatePrompting    = "prompting"
 	templateOutcome      = "outcome"
+	templateIntegrity    = "integrity"
 	templateSummary      = "summary"
 
 	// Timeline categories: the deterministic backbone of the authenticity lens.
@@ -130,13 +132,27 @@ type RunReport struct {
 	Deterministic Metrics     `json:"deterministic"`
 	// GradeProcess (A) and GradeSolution (B) are the two component grades;
 	// Composite is their combined total (their equal-weighted mean). See Grades.
-	GradeProcess  *float64     `json:"grade_process,omitempty"`
-	GradeSolution *float64     `json:"grade_solution,omitempty"`
-	Composite     *float64     `json:"composite,omitempty"`
-	Flags         []string     `json:"flags,omitempty"`
-	Summary       string       `json:"summary,omitempty"`
-	Lenses        []LensResult `json:"lenses"`
-	Warnings      []string     `json:"warnings,omitempty"`
+	GradeProcess  *float64 `json:"grade_process,omitempty"`
+	GradeSolution *float64 `json:"grade_solution,omitempty"`
+	Composite     *float64 `json:"composite,omitempty"`
+	// IntegrityFlag is raised when the integrity lens is present, evidence-supported,
+	// and scored at or below IntegrityFlagThreshold — i.e. the assistant raised a
+	// substantive integrity/validity concern (test-set contamination, leakage,
+	// fabricated results, a rules violation, …) and the team proceeded without
+	// addressing it. The submission still ranks; the flag surfaces the concern to
+	// the jury. IntegrityReason carries the short reason plus its evidence anchor.
+	IntegrityFlag   bool   `json:"integrity_flag,omitempty"`
+	IntegrityReason string `json:"integrity_reason,omitempty"`
+	// IntegritySignal records whether an ASSISTANT turn in the brain actually raised
+	// an integrity warning (an integrity keyword in a transcript assistant turn). It
+	// gates IntegrityFlag so a hallucinated low score on a clean team cannot raise
+	// the flag, and is persisted so the flag recomputes consistently when a saved
+	// board is reloaded (the transcripts are no longer on hand at that point).
+	IntegritySignal bool         `json:"integrity_signal,omitempty"`
+	Flags           []string     `json:"flags,omitempty"`
+	Summary         string       `json:"summary,omitempty"`
+	Lenses          []LensResult `json:"lenses"`
+	Warnings        []string     `json:"warnings,omitempty"`
 }
 
 // RankReport ranks a directory of submissions.

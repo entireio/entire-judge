@@ -76,6 +76,13 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	// 3. idea_plan_execution — LLM-scored.
 	report.Lenses = append(report.Lenses, runScoredLens(ctx, sc, LensOutcome, templateOutcome, params, run, &llmFailures))
 
+	// 3b. integrity — LLM-scored; joins Grade A PENALTY-ONLY (see Grades): it counts
+	//     toward the process mean only when it is a genuine, evidence-backed concern
+	//     (the assistant warned about a substantive integrity/validity problem and the
+	//     team proceeded without addressing it), in which case its low score drags the
+	//     composite down. A clean or hallucinated integrity read is excluded.
+	report.Lenses = append(report.Lenses, runScoredLens(ctx, sc, LensIntegrity, templateIntegrity, params, run, &llmFailures))
+
 	// 4. effort_consistency — DETERMINISTIC.
 	report.Lenses = append(report.Lenses, effortLens(sc.Metrics))
 
@@ -97,8 +104,25 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	}
 
 	OrderLenses(report.Lenses)
-	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics)
-	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses)
+
+	// The corroborating integrity signal is ANCHOR-SCOPED: it is computed here, once
+	// the integrity LensResult exists, from the sessions THAT LENS cited as evidence —
+	// true only when a cited session has an assistant turn carrying an integrity
+	// keyword. This replaces the old brain-wide scan, which fired on benign keyword-ish
+	// chatter anywhere in the brain. It is persisted on the report so a reloaded saved
+	// board (transcripts no longer on hand) recomputes the flag from the trusted bool.
+	var integrityLens LensResult
+	for i := range report.Lenses {
+		if report.Lenses[i].Lens == LensIntegrity {
+			integrityLens = report.Lenses[i]
+			break
+		}
+	}
+	integritySignal := integritySignalForLens(brainDir, sc.Sessions, integrityLens)
+	report.IntegritySignal = integritySignal
+	report.Composite, report.Flags = compositeAndFlags(report.Lenses, sc.Metrics, integritySignal)
+	report.GradeProcess, report.GradeSolution, _ = Grades(report.Lenses, integritySignal)
+	report.IntegrityFlag, report.IntegrityReason = DeriveIntegrityFlag(report.Lenses, integritySignal)
 	return report, nil
 }
 
@@ -175,7 +199,7 @@ func mergeLLMBullets(det *LensResult, llm LensResult, sc submissionContext) {
 // folded into the hash as an empty body rather than failing.
 func PromptFingerprint(agentName, model, effort string) string {
 	h := sha256.New()
-	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome} {
+	for _, name := range []string{templateAuthenticity, templatePrompting, templateOutcome, templateIntegrity} {
 		body, _ := loadTemplate(name)
 		fmt.Fprintf(h, "%s\x00%s\x00", name, body)
 	}

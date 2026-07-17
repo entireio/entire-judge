@@ -109,6 +109,34 @@ func TestExtractHumanPromptsJSONL(t *testing.T) {
 	}
 }
 
+func TestExtractConversationTurns(t *testing.T) {
+	// Mixed shapes: claude assistant (content blocks with a tool_use dropped),
+	// codex response_item assistant, pi message user, and a bare-role user.
+	raw := `{"type":"user","message":{"role":"user","content":"do the thing"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I warn you: this is contaminated"},{"type":"tool_use","name":"x"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"proceeding"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"ok proceed"}]}}
+{"role":"user","content":"bare role turn"}
+{"type":"event_msg","payload":{"type":"reasoning","text":"drop me"}}`
+	turns := ExtractConversationTurns(raw)
+	want := []Turn{
+		{Role: "user", Text: "do the thing"},
+		{Role: "assistant", Text: "I warn you: this is contaminated"},
+		{Role: "assistant", Text: "proceeding"},
+		{Role: "user", Text: "ok proceed"},
+	}
+	// The bare-role user turn has no text via conversationText's default branch
+	// (obj["message"] is absent), so it is dropped; reasoning is dropped too.
+	if len(turns) != len(want) {
+		t.Fatalf("turns = %v, want %d attributed turns", turns, len(want))
+	}
+	for i, w := range want {
+		if turns[i].Role != w.Role || turns[i].Text != w.Text {
+			t.Errorf("turn %d = %+v, want %+v", i, turns[i], w)
+		}
+	}
+}
+
 func TestExtractHumanPromptsPlainTextFallback(t *testing.T) {
 	raw := "just some notes\nmore notes"
 	prompts := ExtractHumanPrompts(raw)

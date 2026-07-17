@@ -292,7 +292,8 @@ func scoreCheckouts(checkouts []string, jobs int, scoreOne func(checkout string)
 func applyGrades(reports []judge.RunReport) {
 	for i := range reports {
 		judge.OrderLenses(reports[i].Lenses)
-		reports[i].GradeProcess, reports[i].GradeSolution, reports[i].Composite = judge.Grades(reports[i].Lenses)
+		reports[i].GradeProcess, reports[i].GradeSolution, reports[i].Composite = judge.Grades(reports[i].Lenses, reports[i].IntegritySignal)
+		reports[i].IntegrityFlag, reports[i].IntegrityReason = judge.DeriveIntegrityFlag(reports[i].Lenses, reports[i].IntegritySignal)
 	}
 }
 
@@ -364,6 +365,9 @@ func printRunReport(cmd *cobra.Command, report *judge.RunReport) {
 	if len(report.Flags) > 0 {
 		fmt.Fprintf(out, "Flags: %s\n", strings.Join(report.Flags, ", "))
 	}
+	if report.IntegrityFlag {
+		fmt.Fprintf(out, "⚠ INTEGRITY FLAG: %s\n", report.IntegrityReason)
+	}
 	fmt.Fprintf(out, "Agent: %s", report.Run.Agent)
 	if report.Run.Model != "" {
 		fmt.Fprintf(out, " (%s)", report.Run.Model)
@@ -416,10 +420,14 @@ func printRankReport(cmd *cobra.Command, report *judge.RankReport) {
 	}
 	for _, entry := range report.Submissions {
 		a, b := "n/a", "n/a"
+		flagStr := strings.Join(entry.Flags, ",")
 		if entry.Report != nil {
 			a, b = g(entry.Report.GradeProcess), g(entry.Report.GradeSolution)
+			if entry.Report.IntegrityFlag {
+				flagStr = strings.TrimSpace("⚠integrity " + flagStr)
+			}
 		}
-		fmt.Fprintf(out, "%-4d %-32s %-6s %-6s %-9s %s\n", entry.Rank, truncateString(entry.SubmissionID, 32), a, b, g(entry.Composite), strings.Join(entry.Flags, ","))
+		fmt.Fprintf(out, "%-4d %-32s %-6s %-6s %-9s %s\n", entry.Rank, truncateString(entry.SubmissionID, 32), a, b, g(entry.Composite), flagStr)
 	}
 	if len(report.Excluded) > 0 {
 		fmt.Fprintf(out, "\nExcluded (hard gate):\n")
@@ -514,7 +522,8 @@ func openSavedBoard(cmd *cobra.Command, flags runFlags, path string) error {
 
 	var single judge.RunReport
 	if err := json.Unmarshal(data, &single); err == nil && single.Kind == "entire_judge_submission" {
-		single.GradeProcess, single.GradeSolution, single.Composite = judge.Grades(single.Lenses)
+		single.GradeProcess, single.GradeSolution, single.Composite = judge.Grades(single.Lenses, single.IntegritySignal)
+		single.IntegrityFlag, single.IntegrityReason = judge.DeriveIntegrityFlag(single.Lenses, single.IntegritySignal)
 		return runTUI(cmd, []judge.RunReport{single}, nil, resolveTheme(flags.theme), single.Run)
 	}
 	return fmt.Errorf("not_a_saved_board: %s is not a saved entire-judge report (expected `rank --json` or `run --json` output)", path)
