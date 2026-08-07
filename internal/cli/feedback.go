@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/suhaanthayyil/entire-judge/internal/agent"
-	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
-	"github.com/suhaanthayyil/entire-judge/internal/judge"
+	"github.com/entireio/entire-judge/internal/agent"
+	"github.com/entireio/entire-judge/internal/brainstore"
+	"github.com/entireio/entire-judge/internal/judge"
 )
 
 type feedbackFlags struct {

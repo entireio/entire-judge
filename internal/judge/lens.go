@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/suhaanthayyil/entire-judge/internal/agent"
-	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
-	"github.com/suhaanthayyil/entire-judge/internal/gitutil"
+	"github.com/entireio/entire-judge/internal/agent"
+	"github.com/entireio/entire-judge/internal/brainstore"
+	"github.com/entireio/entire-judge/internal/gitutil"
 )
 
 const (

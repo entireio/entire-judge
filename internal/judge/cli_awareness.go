@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
+	"github.com/entireio/entire-judge/internal/brainstore"
 )
 
 // collectEntireUsage scans each session transcript for Entire skill/CLI/MCP

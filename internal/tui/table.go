@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/suhaanthayyil/entire-judge/internal/judge"
+	"github.com/entireio/entire-judge/internal/judge"
 )
 
 const (

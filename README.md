@@ -39,7 +39,7 @@ Install the plugin binary with Go, then copy it into Entire's managed plugin
 directory:
 
 ```sh
-go install github.com/suhaanthayyil/entire-judge/cmd/entire-judge@latest
+go install github.com/entireio/entire-judge/cmd/entire-judge@latest
 entire plugin install "$(go env GOPATH)/bin/entire-judge" --force
 entire judge version
 ```

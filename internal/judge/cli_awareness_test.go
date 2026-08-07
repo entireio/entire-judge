@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
+	"github.com/entireio/entire-judge/internal/brainstore"
 )
 
 func TestCLIAwarenessLensRubric(t *testing.T) {

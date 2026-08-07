@@ -10,7 +10,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
-	"github.com/suhaanthayyil/entire-judge/internal/gitutil"
+	"github.com/entireio/entire-judge/internal/gitutil"
 )
 
 // Options plumbs version, environment, the git runner, and a clock through the

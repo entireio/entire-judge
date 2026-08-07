@@ -174,18 +174,26 @@ ollama list
 
 Pick an installed coding or instruction model for the `--model` flag.
 
-Alternative Go install path (module paths below match each plugin's `go.mod`;
-prefer the `entireio` source clones above when possible):
+Alternative Go install path — install from the `entireio` clones above so the
+GitHub org path is the source of truth (no personal-fork module paths):
+
+```sh
+cd ~/entire-jury-tools
+(cd entire-graph && go install ./cmd/entire-graph)
+(cd entire-brain && go install ./cmd/entire-brain)
+(cd entire-judge && go install ./cmd/entire-judge)
+
+entire plugin install "$(go env GOPATH)/bin/entire-graph" --force
+entire plugin install "$(go env GOPATH)/bin/entire-brain" --force
+entire plugin install "$(go env GOPATH)/bin/entire-judge" --force
+```
+
+Remote `go install` also works when a plugin's `go.mod` module path already
+matches the org (`entire-graph`, `entire-judge`):
 
 ```sh
 go install github.com/entireio/entire-graph/cmd/entire-graph@latest
-entire plugin install "$(go env GOPATH)/bin/entire-graph" --force
-
-go install github.com/ashtom/entire-brain/cmd/entire-brain@latest
-entire plugin install "$(go env GOPATH)/bin/entire-brain" --force
-
-go install github.com/suhaanthayyil/entire-judge/cmd/entire-judge@latest
-entire plugin install "$(go env GOPATH)/bin/entire-judge" --force
+go install github.com/entireio/entire-judge/cmd/entire-judge@latest
 ```
 
 ## Prepare A Jury Workspace
