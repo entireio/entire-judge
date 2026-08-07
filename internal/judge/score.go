@@ -7,16 +7,17 @@ import (
 )
 
 // lensDisplayRank orders lenses for display and JSON: the Grade A (process)
-// lenses first — authenticity, prompting_skill, effort_consistency — then the
-// Grade B (solution) lens idea_plan_execution, then descriptive lenses. This puts
-// effort_consistency above idea_plan_execution everywhere the lenses are shown.
+// lenses first — authenticity, prompting_skill, effort_consistency,
+// cli_awareness, integrity — then the Grade B (solution) lens
+// idea_plan_execution, then descriptive lenses.
 var lensDisplayRank = map[string]int{
 	LensAuthenticity: 0,
 	LensPrompting:    1,
 	LensEffort:       2,
-	LensIntegrity:    3,
-	LensOutcome:      4,
-	LensAgent:        5,
+	LensCLIAwareness: 3,
+	LensIntegrity:    4,
+	LensOutcome:      5,
+	LensAgent:        6,
 }
 
 func lensRankOf(name string) int {
@@ -140,11 +141,11 @@ func agentLeverageLens(m Metrics) LensResult {
 	}
 }
 
-// compositeAndFlags computes the weighted composite over the five scored lenses
-// (authenticity, prompting_skill, effort_consistency, integrity, idea_plan_execution;
-// agent_leverage excluded) and surfaces hard-gate flags. Degenerate timeline
-// categories are flagged so the jury sees them rather than a silently averaged
-// number.
+// compositeAndFlags computes the weighted composite over the scored lenses
+// (authenticity, prompting_skill, effort_consistency, cli_awareness, integrity,
+// idea_plan_execution; agent_leverage excluded) and surfaces hard-gate flags.
+// Degenerate timeline categories are flagged so the jury sees them rather than a
+// silently averaged number.
 func compositeAndFlags(lenses []LensResult, m Metrics, integritySignal bool) (*float64, []string) {
 	// Only evidence-backed lens scores count toward the composite. An LLM lens
 	// that returned a score but whose evidence anchors did not resolve against
@@ -197,13 +198,13 @@ func compositeAndFlags(lenses []LensResult, m Metrics, integritySignal bool) (*f
 }
 
 // processLenses are the "how they worked" component (Grade A): the deterministic
-// timeline/effort signals, the LLM prompting-skill read, and — PENALTY-ONLY — the
-// LLM integrity read. Integrity feeds Grade A only when it is a genuine,
-// evidence-backed concern (integrityIsPenalty: supported, scored <=
+// timeline/effort/cli-awareness signals, the LLM prompting-skill read, and —
+// PENALTY-ONLY — the LLM integrity read. Integrity feeds Grade A only when it is
+// a genuine, evidence-backed concern (integrityIsPenalty: supported, scored <=
 // IntegrityFlagThreshold, and a real assistant warning in the brain); a clean or
 // hallucinated integrity read is excluded entirely so it can neither inflate nor
 // falsely drag the grade. The solution component (Grade B) is idea_plan_execution.
-var processLenses = []string{LensAuthenticity, LensPrompting, LensEffort, LensIntegrity}
+var processLenses = []string{LensAuthenticity, LensPrompting, LensEffort, LensCLIAwareness, LensIntegrity}
 
 // IntegrityFlagThreshold is the integrity score at or below which a validated
 // integrity lens raises the red flag on a submission.

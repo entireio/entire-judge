@@ -78,6 +78,7 @@ it informs the jury's judgment, it does not replace it.`,
 	cmd.AddCommand(newRunCommand(opts))
 	cmd.AddCommand(newRankCommand(opts))
 	cmd.AddCommand(newWatchCommand(opts))
+	cmd.AddCommand(newFeedbackCommand(opts))
 	cmd.AddCommand(newVersionCommand(opts.Version))
 
 	return cmd

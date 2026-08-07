@@ -19,6 +19,7 @@ const (
 	LensOutcome      = "idea_plan_execution"
 	LensEffort       = "effort_consistency"
 	LensIntegrity    = "integrity"
+	LensCLIAwareness = "cli_awareness"
 	LensAgent        = "agent_leverage"
 
 	// Template basenames for the LLM lenses (differ from the lens names).
@@ -82,6 +83,16 @@ type Metrics struct {
 	SemanticRelations    int      `json:"semantic_relations,omitempty"`
 	SemanticFiles        int      `json:"semantic_files,omitempty"`
 	SemanticCapabilities []string `json:"semantic_capabilities,omitempty"`
+
+	// Entire CLI-awareness tallies mined from session transcripts (Skill tool,
+	// `entire …` shell commands, Entire MCP tools, /entire slash prompts).
+	EntireSkillInvocations     int            `json:"entire_skill_invocations,omitempty"`
+	EntireCLIInvocations       int            `json:"entire_cli_invocations,omitempty"`
+	EntireMCPInvocations       int            `json:"entire_mcp_invocations,omitempty"`
+	EntireSignalSessions       int            `json:"entire_signal_sessions,omitempty"`
+	DistinctEntireCapabilities []string       `json:"distinct_entire_capabilities,omitempty"`
+	EntireSignalHistogram      map[string]int `json:"entire_signal_histogram,omitempty"`
+	EntireSignalEvidence       []string       `json:"entire_signal_evidence,omitempty"`
 }
 
 // LensComponent is a named sub-score of a lens (e.g. the outcome lens's idea,

@@ -140,10 +140,11 @@ and `"no_egress":true`.
 
 ## Check The Judge Agent
 
-`entire judge` can always run the deterministic lenses, but the
-`prompting_skill`, `idea_plan_execution`, `integrity`, and generated `summary`
-fields need a judge agent. If you plan to use Claude Code, make sure the same terminal that
-runs `entire judge` can see a logged-in `claude` binary:
+`entire judge` can always run the deterministic lenses (including
+`cli_awareness`), but the `prompting_skill`, `idea_plan_execution`, `integrity`,
+and generated `summary` fields need a judge agent. If you plan to use Claude Code,
+make sure the same terminal that runs `entire judge` can see a logged-in `claude`
+binary:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -412,6 +413,17 @@ Open the saved board in the interactive dashboard without re-scoring:
 entire judge watch "$REPORTS/board.json"
 ```
 
+Export per-team feedback markdown for **every** submission (winners and
+non-winners). Prefer the saved board so no LLM calls are re-run:
+
+```sh
+entire judge feedback "$REPORTS/board.json" --out "$REPORTS/feedback" --winners 3
+```
+
+`--winners N` only changes the greeting header; every ranked and excluded team
+still gets a `feedback-<slug>.md` file with summary, lens notes, evidence, and
+the `cli_awareness` breakdown.
+
 `rank`, `run`, and `watch` open the TUI only when stdout is an interactive
 terminal. Use `--json` for scripts and `--plain` for copyable text output.
 
@@ -437,11 +449,12 @@ presentation in judged sports): two component grades, each 0–5, then their
 equal-weighted mean as the **Combined** total that orders the board.
 
 - **Grade A — Process** (how they worked): the mean of the supported process
-  lenses — `authenticity`, `prompting_skill`, `effort_consistency`, and —
-  **penalty-only** — `integrity`. `integrity` counts toward this grade *only*
-  when it is a genuine flagged concern (real assistant warning, evidence-supported,
-  score ≤ 2.0), so it can drag the grade down but a clean read never raises it.
-  (A lens with no resolvable evidence is dropped from the mean, not counted as zero.)
+  lenses — `authenticity`, `prompting_skill`, `effort_consistency`,
+  `cli_awareness`, and — **penalty-only** — `integrity`. `integrity` counts toward
+  this grade *only* when it is a genuine flagged concern (real assistant warning,
+  evidence-supported, score ≤ 2.0), so it can drag the grade down but a clean read
+  never raises it. (A lens with no resolvable evidence is dropped from the mean,
+  not counted as zero.)
 - **Grade B — Solution** (what they built): the `idea_plan_execution` lens.
 - **Combined** = the equal-weighted mean of whichever grades are present; if no
   judge agent is available (no-egress or the agent is down), Grade B (Solution) is
@@ -455,6 +468,12 @@ The lenses behind the grades:
   `--started-at`.
 - `prompting_skill` (Process): LLM-scored from human prompt excerpts.
 - `effort_consistency` (Process): deterministic session/turn/file activity.
+- `cli_awareness` (Process): deterministic (0–5). Counts Entire skill invocations
+  (`Skill` tool / `/entire`), `entire …` shell commands (graph/brain/sem/judge/…),
+  and Entire MCP tools mined from session transcripts. Higher scores reward
+  sustained multi-capability CLI use — an advisory incentive for Entire CLI
+  capability awareness. Spam/empty touches still register as a weak signal; the
+  jury can discount via evidence bullets.
 - `integrity` (Process): LLM-scored (0–5, low is bad). Detects when the assistant
   explicitly warned about a substantive integrity or validity problem — test-set
   contamination, train/test leakage, evaluating on training data, cheating,
@@ -517,12 +536,15 @@ During judging:
 3. Use the Ranked tab for the advisory ordering.
 4. Use the Excluded tab for submissions with timeline/history problems.
 5. Open individual reports for close calls with `entire judge run --plain`.
+6. Export shareable notes with `entire judge feedback board.json --out feedback`.
 
 After judging:
 
 1. Save `reports/board.json`.
 2. Save any single-submission JSON reports used for decisions.
-3. Do not publish raw reports unless the event policy allows sharing prompts,
+3. Share `feedback/*.md` with teams (including non-winners) when the event policy
+   allows.
+4. Do not publish raw reports unless the event policy allows sharing prompts,
    transcripts, repository metadata, and semantic code facts.
 
 ## Troubleshooting

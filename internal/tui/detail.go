@@ -16,6 +16,7 @@ var lensComponent = map[string]string{
 	judge.LensAuthenticity: "A · process",
 	judge.LensPrompting:    "A · process",
 	judge.LensEffort:       "A · process",
+	judge.LensCLIAwareness: "A · process",
 	judge.LensIntegrity:    "A · process",
 	judge.LensOutcome:      "B · solution",
 }
@@ -205,6 +206,15 @@ func findingsBlock(th Theme, r *judge.RunReport, width int) string {
 			built += " · " + strings.Join(m.SemanticCapabilities, ", ")
 		}
 		metric("built (sem)", built)
+	}
+	entireTotal := m.EntireSkillInvocations + m.EntireCLIInvocations + m.EntireMCPInvocations
+	if entireTotal > 0 || m.EntireSignalSessions > 0 {
+		line := fmt.Sprintf("%d skill · %d CLI · %d MCP across %d session(s)",
+			m.EntireSkillInvocations, m.EntireCLIInvocations, m.EntireMCPInvocations, m.EntireSignalSessions)
+		if len(m.DistinctEntireCapabilities) > 0 {
+			line += " · " + strings.Join(m.DistinctEntireCapabilities, ", ")
+		}
+		metric("entire CLI", line)
 	}
 	b.WriteString("\n")
 
