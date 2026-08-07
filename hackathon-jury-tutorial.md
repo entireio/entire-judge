@@ -632,5 +632,5 @@ git push origin HEAD
 git push origin 'refs/heads/entire/*:refs/heads/entire/*'
 ```
 
-If the team uses a separate checkpoint remote, make sure Peyton/Cole/the jury
-account has access to that remote before scoring starts.
+If the team uses a separate checkpoint remote, make sure the jury account has
+access to that remote before scoring starts.
