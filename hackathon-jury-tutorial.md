@@ -1,4 +1,4 @@
-# Hackathon Jury Tutorial: Score Submissions With Entire Brain, Sem, and Judge
+# Hackathon Jury Tutorial: Score Submissions With Entire Graph, Brain, and Judge
 
 This is a practical runbook for a hackathon jury that wants to use Entire to
 score submitted repositories. The short version:
@@ -8,6 +8,8 @@ score submitted repositories. The short version:
 3. Clone each submission and fetch its Entire checkpoint history.
 4. Build a full brain for each submission.
 5. Run `entire judge rank` to produce an advisory jury board.
+6. Optionally export per-team feedback with `entire judge feedback` (including
+   non-winners).
 
 The main jury-facing tool is `entire judge`. It depends on a local
 `entire brain` for each submission, and the brain uses `entire-graph` to add a
@@ -89,11 +91,10 @@ entire plugin --help
 ## Install The Plugins
 
 Use the source install path when testing the newest plugin builds. This path
-assumes `mise` is installed; if it is not, use the Go install path below once the
-repositories are public.
+assumes `mise` is installed; if it is not, use the Go install path below.
 
-Note: these are the current repository URLs. After the repos move into the
-`entireio` GitHub org, replace the URLs with the org versions.
+All three plugin repositories live under the `entireio` GitHub org
+(`entire-graph` is the semantic provider formerly referred to as `entire-sem`).
 
 ```sh
 mkdir -p ~/entire-jury-tools
@@ -173,8 +174,8 @@ ollama list
 
 Pick an installed coding or instruction model for the `--model` flag.
 
-Alternative Go install path, once the repositories are public and the jury
-machine has access to them:
+Alternative Go install path (module paths below match each plugin's `go.mod`;
+prefer the `entireio` source clones above when possible):
 
 ```sh
 go install github.com/entireio/entire-graph/cmd/entire-graph@latest
@@ -192,9 +193,9 @@ entire plugin install "$(go env GOPATH)/bin/entire-judge" --force
 Create one working directory for the event:
 
 ```sh
-mkdir -p ~/paris-hackathon-jury/submissions
-mkdir -p ~/paris-hackathon-jury/reports
-cd ~/paris-hackathon-jury
+mkdir -p ~/entire-hackathon-jury/submissions
+mkdir -p ~/entire-hackathon-jury/reports
+cd ~/entire-hackathon-jury
 
 export EVENT_START="2026-06-27T09:00:00+02:00"
 export SUBMISSIONS="$PWD/submissions"
