@@ -1,4 +1,4 @@
-module github.com/suhaanthayyil/entire-judge
+module github.com/entireio/entire-judge
 
 go 1.24.2
 

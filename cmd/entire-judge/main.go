@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/suhaanthayyil/entire-judge/internal/cli"
+	"github.com/entireio/entire-judge/internal/cli"
 )
 
 var version = "dev"

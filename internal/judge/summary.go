@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/suhaanthayyil/entire-judge/internal/agent"
+	"github.com/entireio/entire-judge/internal/agent"
 )
 
 // runSummary asks the lens agent for a short, evidence-grounded overview of the

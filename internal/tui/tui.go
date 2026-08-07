@@ -21,7 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/suhaanthayyil/entire-judge/internal/judge"
+	"github.com/entireio/entire-judge/internal/judge"
 )
 
 // Model is the dashboard model over a ranked + excluded set of submissions.

@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/suhaanthayyil/entire-judge/internal/judge"
+	"github.com/entireio/entire-judge/internal/judge"
 )
 
 func score(v float64) *float64 { return &v }

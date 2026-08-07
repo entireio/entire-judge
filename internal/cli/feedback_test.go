@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/suhaanthayyil/entire-judge/internal/judge"
+	"github.com/entireio/entire-judge/internal/judge"
 )
 
 func TestFeedbackFilename(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
-	"github.com/suhaanthayyil/entire-judge/internal/gitutil"
+	"github.com/entireio/entire-judge/internal/brainstore"
+	"github.com/entireio/entire-judge/internal/gitutil"
 )
 
 // computeMetrics derives the deterministic metrics for one brain. hackathonStart

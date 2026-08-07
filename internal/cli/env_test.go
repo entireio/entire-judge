@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/suhaanthayyil/entire-judge/internal/brainstore"
+	"github.com/entireio/entire-judge/internal/brainstore"
 )
 
 func TestBrainDataDirsPrefersBrainPlugin(t *testing.T) {

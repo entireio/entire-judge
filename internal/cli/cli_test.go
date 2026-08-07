@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/suhaanthayyil/entire-judge/internal/gitutil"
+	"github.com/entireio/entire-judge/internal/gitutil"
 )
 
 type fakeRunner struct {
