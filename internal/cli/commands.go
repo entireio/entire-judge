@@ -196,7 +196,8 @@ func runJudgeRank(cmd *cobra.Command, opts Options, flags runFlags, dir string) 
 
 	report.FairnessNotes = []string{
 		judge.Disclaimer,
-		"Authenticity and effort are deterministic; prompting and idea/plan/execution are LLM-scored and may vary by agent/model.",
+		"Authenticity, effort, and cli_awareness are deterministic; prompting, integrity, and idea/plan/execution are LLM-scored and may vary by agent/model.",
+		"cli_awareness rewards Entire skill/CLI/MCP usage mined from transcripts (advisory incentive for CLI capability awareness).",
 		"Submissions that predate the event or lack session history are excluded from the ordered table, not averaged into it.",
 	}
 

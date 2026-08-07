@@ -86,6 +86,9 @@ func Submit(ctx context.Context, runner gitutil.CommandRunner, run agent.Runner,
 	// 4. effort_consistency — DETERMINISTIC.
 	report.Lenses = append(report.Lenses, effortLens(sc.Metrics))
 
+	// 4b. cli_awareness — DETERMINISTIC Grade A lens rewarding Entire skill/CLI use.
+	report.Lenses = append(report.Lenses, cliAwarenessLens(sc.Metrics))
+
 	// 5. agent_leverage — descriptive category, unscored.
 	report.Lenses = append(report.Lenses, agentLeverageLens(sc.Metrics))
 
@@ -155,6 +158,9 @@ func assembleSubmissionContext(ctx context.Context, runner gitutil.CommandRunner
 			metrics.SemanticCapabilities = summary.Capabilities
 		}
 	}
+
+	// Entire CLI-awareness: scan transcripts for skill/CLI/MCP signals.
+	collectEntireUsage(brainDir, sc.Sessions, &metrics)
 
 	sc.Metrics = metrics
 	sc.Coverage = coverage

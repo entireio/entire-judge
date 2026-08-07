@@ -17,11 +17,11 @@ entire judge add <repo-url> [--dir DIR] [--entire-binary BIN] [--build] [--check
 entire judge run [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME] [--json] [--plain]
 entire judge rank [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME] [--json] [--plain]
 entire judge watch [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME]
+entire judge feedback [path] [--out DIR] [--winners N]   # export per-team markdown (incl. non-winners)
 entire judge version
 
-# All three take a [path]; the verb decides what happens to it.
-# `run` scores one submission repo (detailed report); `rank` and `watch` take a
-# directory of submission repos (ranked table / interactive view).
+# `run` scores one submission repo; `rank`/`watch` take a directory of repos
+# (or a saved board JSON). `feedback` writes one markdown file per team.
 ```
 
 It is fully self-contained: it reads the brain's on-disk export directly and does
@@ -120,16 +120,22 @@ lenses.
   Output).
 - **effort_consistency** — deterministic. Rewards sustained, multi-session work
   over a single burst.
+- **cli_awareness** — deterministic (0–5). Mines session transcripts for Entire
+  skill invocations (`Skill` tool / `/entire`), `entire …` shell commands
+  (graph/brain/sem/judge/…), and Entire MCP tools. Higher scores reward sustained,
+  multi-capability CLI use — an advisory incentive for Entire CLI capability
+  awareness. Empty/spam touches still count as a weak signal; the jury can discount
+  via the evidence bullets.
 - **agent_leverage** — descriptive (unscored). Which agents the team leaned on.
 
 The headline score is built like a multi-component score (technical + presentation
 in judged sports): two component grades, each 0–5, then their equal-weighted mean.
 **Grade A (process)** is the mean of the supported process lenses — `authenticity`,
-`prompting_skill`, `effort_consistency`, and — **penalty-only** — `integrity`.
-`integrity` feeds Grade A *only* when it is a genuine flagged concern (the same
-condition that raises the red flag: a real assistant warning, evidence-supported,
-score ≤ 2.0), so it can drag the grade down but a clean `integrity` read never
-inflates it. **Grade B (solution)** is the
+`prompting_skill`, `effort_consistency`, `cli_awareness`, and — **penalty-only** —
+`integrity`. `integrity` feeds Grade A *only* when it is a genuine flagged concern
+(the same condition that raises the red flag: a real assistant warning,
+evidence-supported, score ≤ 2.0), so it can drag the grade down but a clean
+`integrity` read never inflates it. **Grade B (solution)** is the
 `idea_plan_execution` lens. The **composite** is the equal-weighted mean of
 whichever of {Grade A, Grade B} are present — so a submission scored with no judge
 agent still gets a Combined equal to its Process grade. A lens with no resolvable
@@ -217,10 +223,20 @@ launch, **score once and browse instantly**:
 ```sh
 entire judge rank ./submissions --started-at <t> --json > board.json   # score once
 entire judge watch board.json                                          # opens instantly, no agent
+entire judge feedback board.json --out ./feedback --winners 3          # markdown for every team
 ```
 
 `watch`/`rank` accept either a directory of repos (score live) or a saved
 `--json` report file (load and open immediately).
+
+### Feedback for every team (including non-winners)
+
+`entire judge feedback` writes one `feedback-<slug>.md` file per ranked **and**
+excluded submission. Prefer feeding it a saved `rank --json` board so no LLM
+calls are re-run — each file reuses that report's Summary, lens verdicts/bullets,
+evidence anchors, and the `cli_awareness` breakdown. `--winners N` only changes
+the greeting ("Congratulations" vs "Keep building"); **all teams still get a
+file**.
 
 ## Example
 
@@ -251,12 +267,14 @@ Advisory only: these scores inform the jury's judgment, they do not replace it.
 ## Layout
 
 - `cmd/entire-judge` — the binary entry point.
-- `internal/cli` — the command tree (`run`, `rank`, `watch`, `version`),
+- `internal/cli` — the command tree (`run`, `rank`, `watch`, `feedback`, `version`),
   environment plumbing, and repo-key derivation.
-- `internal/judge` — the lens set, metrics math, scoring, composite/hard gates,
-  the report schema, and the embedded lens templates.
+- `internal/judge` — the lens set (incl. deterministic `cli_awareness`), metrics
+  math, scoring, composite/hard gates, the report schema, and the embedded lens
+  templates.
 - `internal/brainstore` — the minimal, self-contained reader for the brain's
-  on-disk manifest, transcripts, and facts.
+  on-disk manifest, transcripts (incl. Entire skill/CLI signal extraction), and
+  facts.
 - `internal/gitutil` — git execution and the commit-history coverage classifier.
 - `internal/agent` — the lens-agent argv builders and the no-egress-aware runner.
 - `internal/tui` — the interactive dashboard (ranked table, per-repo page,
