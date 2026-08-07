@@ -270,8 +270,9 @@ func DeriveIntegrityFlag(lenses []LensResult, integritySignal bool) (bool, strin
 // Grades computes the two component grades and their combined total from a
 // submission's scored lenses, in the spirit of a multi-component score (technical
 // + presentation): Grade A (process) is the mean of the supported process lenses
-// (authenticity, prompting_skill, effort_consistency, and — PENALTY-ONLY —
-// integrity); Grade B (solution) is the supported idea_plan_execution score.
+// (authenticity, prompting_skill, effort_consistency, cli_awareness, and —
+// PENALTY-ONLY — integrity); Grade B (solution) is the supported
+// idea_plan_execution score.
 // Combined is the mean of whichever grades are present, so the two components count
 // equally regardless of how many lenses feed each. A nil grade means no supported
 // lens fed it.
