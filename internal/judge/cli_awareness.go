@@ -13,6 +13,8 @@ import (
 func collectEntireUsage(brainDir string, sessions []brainstore.Session, metrics *Metrics) {
 	hist := map[string]int{}
 	caps := map[string]struct{}{}
+	capSessions := map[string]int{}
+	subcommands := map[string]int{}
 	sessionsWith := 0
 	var evidence []string
 
@@ -30,6 +32,10 @@ func collectEntireUsage(brainDir string, sessions []brainstore.Session, metrics 
 			continue
 		}
 		sessionsWith++
+		// A capability counts once per session here: reaching for the brain in six
+		// sessions is sustained use, whereas six calls inside one session is a single
+		// episode. Counting invocations cannot tell those apart.
+		seenThisSession := map[string]struct{}{}
 		for _, sig := range signals {
 			switch sig.Kind {
 			case brainstore.EntireSignalSkill:
@@ -43,6 +49,13 @@ func collectEntireUsage(brainDir string, sessions []brainstore.Session, metrics 
 			hist[key]++
 			if sig.Capability != "" {
 				caps[sig.Capability] = struct{}{}
+				if _, dup := seenThisSession[sig.Capability]; !dup {
+					seenThisSession[sig.Capability] = struct{}{}
+					capSessions[sig.Capability]++
+				}
+			}
+			if detail := strings.TrimSpace(sig.Detail); detail != "" {
+				subcommands[detail]++
 			}
 			if len(evidence) < 6 {
 				anchor := session.SessionID
@@ -58,6 +71,9 @@ func collectEntireUsage(brainDir string, sessions []brainstore.Session, metrics 
 	metrics.EntireSignalHistogram = hist
 	metrics.DistinctEntireCapabilities = sortedKeys(caps)
 	metrics.EntireSignalEvidence = evidence
+	metrics.EntireCapabilitySessions = capSessions
+	metrics.EntireSubcommands = subcommands
+	metrics.EntireProblemSignals = deriveProblemSignals(capSessions, sessionsWith)
 }
 
 func sortedKeys(set map[string]struct{}) []string {
@@ -118,6 +134,17 @@ func cliAwarenessLens(m Metrics) LensResult {
 	if len(m.EntireSignalHistogram) > 0 {
 		bullets = append(bullets, "Signal mix: "+formatHistogram(m.EntireSignalHistogram)+".")
 	}
+	// Reach per capability, and the subcommands actually used: the two things a
+	// juror asks for after the score. Sorted so the report is reproducible.
+	if len(m.EntireCapabilitySessions) > 0 {
+		bullets = append(bullets, "Reach: "+formatHistogram(m.EntireCapabilitySessions)+" (sessions per capability).")
+	}
+	if len(m.EntireSubcommands) > 0 {
+		bullets = append(bullets, "Used: "+formatTopN(m.EntireSubcommands, 8)+".")
+	}
+	for _, sig := range m.EntireProblemSignals {
+		bullets = append(bullets, "→ "+sig)
+	}
 	bullets = append(bullets, "Empty/spam invocations still count as a weak signal; jury may discount via evidence.")
 
 	return LensResult{
@@ -143,6 +170,85 @@ func formatHistogram(hist map[string]int) string {
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, fmt.Sprintf("%s×%d", k, hist[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// deriveProblemSignals reads the capability-by-session pattern and names the
+// developer problem it points at. These are the follow-up questions jurors ask
+// after seeing a cli_awareness score — "did they use Entire to carry context
+// between sessions?", "did they use it to find their way around the code?" —
+// answered from the pattern rather than from an LLM.
+//
+// Each reading is advisory and deliberately conservative: it says where to look,
+// never that the team definitely solved that problem. A juror confirms against
+// the evidence anchors.
+func deriveProblemSignals(capSessions map[string]int, totalSessions int) []string {
+	if len(capSessions) == 0 || totalSessions == 0 {
+		return nil
+	}
+	var out []string
+
+	// Context continuity: the brain reached for again and again, across sessions,
+	// is the signature of carrying context forward (a forgetful agent, or picking
+	// up someone else's thread). Once is just setup.
+	if n := capSessions[brainstore.CapabilityBrain]; n >= 2 {
+		out = append(out, fmt.Sprintf(
+			"context continuity: brain used in %d of %d session(s) — carried context forward, not just set up once",
+			n, totalSessions))
+	} else if n == 1 {
+		out = append(out, "context continuity: brain touched in a single session — looks like setup, not reuse")
+	}
+
+	// Code navigation: graph or sem use points at finding one's way around code
+	// rather than re-reading it.
+	nav := capSessions[brainstore.CapabilityGraph] + capSessions[brainstore.CapabilitySem]
+	if nav >= 2 {
+		out = append(out, fmt.Sprintf(
+			"code navigation: graph/sem used in %d session(s) — located code instead of re-reading it", nav))
+	} else if nav == 1 {
+		out = append(out, "code navigation: one graph/sem session — tried it, did not lean on it")
+	}
+
+	// Breadth: how much of the toolkit they actually reached for.
+	families := 0
+	for capability, n := range capSessions {
+		if n > 0 && capability != brainstore.CapabilitySkill {
+			families++
+		}
+	}
+	switch {
+	case families >= 3:
+		out = append(out, fmt.Sprintf("breadth: %d capability families used — explored the toolkit", families))
+	case families == 0:
+		out = append(out, "breadth: skill invocations only, no capability behind them")
+	}
+	return out
+}
+
+// formatTopN renders the n highest-count entries of a histogram, ties broken by
+// name so the output is stable across runs.
+func formatTopN(h map[string]int, n int) string {
+	type kv struct {
+		k string
+		v int
+	}
+	items := make([]kv, 0, len(h))
+	for k, v := range h {
+		items = append(items, kv{k, v})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].v != items[j].v {
+			return items[i].v > items[j].v
+		}
+		return items[i].k < items[j].k
+	})
+	if len(items) > n {
+		items = items[:n]
+	}
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		parts = append(parts, fmt.Sprintf("%s×%d", it.k, it.v))
 	}
 	return strings.Join(parts, ", ")
 }
