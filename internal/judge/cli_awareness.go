@@ -136,8 +136,9 @@ func cliAwarenessLens(m Metrics) LensResult {
 	}
 	// Reach per capability, and the subcommands actually used: the two things a
 	// juror asks for after the score. Sorted so the report is reproducible.
-	if len(m.EntireCapabilitySessions) > 0 {
-		bullets = append(bullets, "Reach: "+formatHistogram(m.EntireCapabilitySessions)+" (sessions per capability).")
+	if chart := formatCapabilityChart(m); len(chart) > 0 {
+		bullets = append(bullets, "Entire capabilities used (bar = sessions reached):")
+		bullets = append(bullets, chart...)
 	}
 	if len(m.EntireSubcommands) > 0 {
 		bullets = append(bullets, "Used: "+formatTopN(m.EntireSubcommands, 8)+".")
@@ -251,4 +252,107 @@ func formatTopN(h map[string]int, n int) string {
 		parts = append(parts, fmt.Sprintf("%s×%d", it.k, it.v))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// capabilityBar renders one horizontal bar per Entire capability, longest first,
+// so a juror sees the SHAPE of a team's usage at a glance rather than reading a
+// comma-separated list. Bar length is sessions-reached; the fill character ramps
+// with breadth so a team that explored the toolkit looks different from one that
+// used a single command a lot.
+//
+// The colour ramp orange→green lives in the TUI (which owns styling); here the
+// ramp is carried as a level 0-3 in the returned rows so plain text and the
+// dashboard agree on it.
+type capabilityRow struct {
+	Name     string
+	Sessions int
+	Calls    int
+	Bar      string
+	Level    int // 0 = narrow (orange) … 3 = broad (green)
+}
+
+// breadthLevel maps the number of non-skill capability families a team touched
+// onto the 0-3 ramp. One family is narrow use; four or more is the full toolkit.
+func breadthLevel(families int) int {
+	switch {
+	case families >= 4:
+		return 3
+	case families == 3:
+		return 2
+	case families == 2:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func capabilityRows(m Metrics) []capabilityRow {
+	if len(m.EntireCapabilitySessions) == 0 {
+		return nil
+	}
+	families := 0
+	for name, n := range m.EntireCapabilitySessions {
+		if n > 0 && name != brainstore.CapabilitySkill {
+			families++
+		}
+	}
+	level := breadthLevel(families)
+
+	maxSessions := 0
+	for _, n := range m.EntireCapabilitySessions {
+		if n > maxSessions {
+			maxSessions = n
+		}
+	}
+	if maxSessions == 0 {
+		return nil
+	}
+
+	// Calls per capability, summed across the kind:capability histogram keys.
+	calls := map[string]int{}
+	for key, n := range m.EntireSignalHistogram {
+		if i := strings.IndexByte(key, ':'); i >= 0 {
+			calls[key[i+1:]] += n
+		}
+	}
+
+	rows := make([]capabilityRow, 0, len(m.EntireCapabilitySessions))
+	for name, n := range m.EntireCapabilitySessions {
+		width := 1 + (n-1)*11/maxSessions // 1..12 columns, proportional to reach
+		if width < 1 {
+			width = 1
+		}
+		rows = append(rows, capabilityRow{
+			Name: name, Sessions: n, Calls: calls[name],
+			Bar: strings.Repeat("█", width), Level: level,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Sessions != rows[j].Sessions {
+			return rows[i].Sessions > rows[j].Sessions
+		}
+		return rows[i].Name < rows[j].Name
+	})
+	return rows
+}
+
+// formatCapabilityChart renders the rows as plain text lines for the lens
+// bullets. The dashboard re-renders the same rows with the colour ramp.
+func formatCapabilityChart(m Metrics) []string {
+	rows := capabilityRows(m)
+	if len(rows) == 0 {
+		return nil
+	}
+	width := 0
+	for _, r := range rows {
+		if len(r.Name) > width {
+			width = len(r.Name)
+		}
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, fmt.Sprintf("%-*s %-12s %d session(s), %d call(s)",
+			width, r.Name, r.Bar, r.Sessions, r.Calls))
+	}
+	return out
 }

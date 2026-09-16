@@ -228,8 +228,21 @@ func findingsBlock(th Theme, r *judge.RunReport, width int) string {
 			b.WriteString(wrap.Render("    " + th.textStyle().Render(lens.Verdict)))
 			b.WriteString("\n")
 		}
+		// Capability bars ramp orange -> green with breadth: a team that reached for
+		// one command a lot should not look like one that explored the toolkit.
+		barCount := 0
 		for _, bullet := range lens.Bullets {
-			b.WriteString(wrap.Render("    • " + bullet))
+			if strings.Contains(bullet, "\u2588") {
+				barCount++
+			}
+		}
+		for _, bullet := range lens.Bullets {
+			if strings.Contains(bullet, "\u2588") {
+				b.WriteString("      " + colorizeBar(bullet, barCount, th))
+				b.WriteString("\n")
+				continue
+			}
+			b.WriteString(wrap.Render("    \u2022 " + bullet))
 			b.WriteString("\n")
 		}
 		for _, e := range lens.Evidence {
@@ -320,4 +333,37 @@ func absFloat(f float64) float64 {
 		return -f
 	}
 	return f
+}
+
+// barRamp picks the fill colour for a capability bar from how many capability
+// families the team touched: orange for narrow use, through amber, to green for
+// a team that reached across the CLI.
+func barRamp(families int) lipgloss.Color {
+	switch {
+	case families >= 4:
+		return lipgloss.Color("47") // green
+	case families == 3:
+		return lipgloss.Color("148") // yellow-green
+	case families == 2:
+		return lipgloss.Color("178") // amber
+	default:
+		return lipgloss.Color("208") // orange
+	}
+}
+
+// colorizeBar renders one chart line, tinting only the bar run so the label and
+// counts keep the normal text colour.
+func colorizeBar(line string, families int, th Theme) string {
+	start := strings.IndexRune(line, '█')
+	if start < 0 {
+		return th.textStyle().Render(line)
+	}
+	end := start
+	for end < len(line) && strings.HasPrefix(line[end:], "█") {
+		end += len("█")
+	}
+	fill := lipgloss.NewStyle().Foreground(barRamp(families))
+	return th.textStyle().Render(line[:start]) +
+		fill.Render(line[start:end]) +
+		th.dimStyle().Render(line[end:])
 }
