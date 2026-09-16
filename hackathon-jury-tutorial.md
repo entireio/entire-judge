@@ -37,10 +37,11 @@ or rank a directory of submissions in a terminal dashboard.
 
 Install these on the jury machine:
 
-- Git
-- Go toolchain with CGO support
+- Git 2.30 or newer
+- Go 1.27 or newer (needed for `entire-brain` and `entire-judge`, not for `entire-graph`)
 - Entire CLI
-- Optional: `mise` for source installs
+- Access to the private `entireio/entire-brain` repository. Check with
+  `git ls-remote https://github.com/entireio/entire-brain.git >/dev/null && echo "access ok"`
 - Optional: `jq` for reading saved JSON reports
 - Optional: Claude Code, Codex, or Ollama for the LLM judge lenses
 
@@ -90,54 +91,72 @@ entire plugin --help
 
 ## Install The Plugins
 
-Use the source install path when testing the newest plugin builds. This path
-assumes `mise` is installed; if it is not, use the Go install path below.
+The three plugins install three different ways. Take them in this order — the brain
+installer also handles the graph.
 
-All three plugin repositories live under the `entireio` GitHub org
-(`entire-graph` is the semantic provider formerly referred to as `entire-sem`).
+`entire-graph` ships in the plugin index, so it needs no clone and no Go toolchain:
 
-```sh
-mkdir -p ~/entire-jury-tools
-cd ~/entire-jury-tools
-
-git clone https://github.com/entireio/entire-graph.git
-cd entire-graph
-mise install
-mise run check
-mise run build
-entire plugin install ./entire-graph --force
+```
+entire plugin install graph
 entire graph version
+```
 
-cd ..
+`entire-brain` has a scripted install that builds and registers *both* `entire-graph` and
+`entire-brain`, writes the default configuration, and runs a health check. It resolves an
+existing `entire-graph` automatically and prints which route it used:
+
+```
 git clone https://github.com/entireio/entire-brain.git
 cd entire-brain
-mise install
-mise run check
-mise run build
-entire plugin install ./entire-brain --force
-entire brain --help
+./scripts/install.sh
 
-cd ..
-git clone https://github.com/entireio/entire-judge.git
-cd entire-judge
-mise install
-mise run check
-mise run build
-entire plugin install ./entire-judge --force
+entire brain version
+entire brain doctor
+```
+
+`entire-brain` is a private repository. If that clone fails, request access before going
+further — nothing below works without it.
+
+`entire-judge` installs with Go:
+
+```
+go install github.com/entireio/entire-judge/cmd/entire-judge@latest
+entire plugin install "$(go env GOPATH)/bin/entire-judge" --force
 entire judge version
 ```
 
-Check that Entire can see the plugins:
+Check that Entire can see all three:
 
-```sh
+```
 entire plugin list
 entire graph doctor --json
-entire brain --help
+entire brain doctor
 entire judge rank --help
 ```
 
-The `entire graph doctor --json` output should include `"provider":"entire-graph"`
-and `"no_egress":true`.
+The `entire graph doctor --json` output should include `"provider":"entire-graph"` and
+`"no_egress":true`.
+
+### Building from source instead
+
+Use this only when you need an unreleased build. Building the graph from source needs a
+CGO-capable toolchain for tree-sitter:
+
+```
+mkdir -p ~/entire-jury-tools && cd ~/entire-jury-tools
+
+git clone https://github.com/entireio/entire-graph.git
+(cd entire-graph && mise install && mise run build && entire plugin install ./entire-graph --force)
+
+git clone https://github.com/entireio/entire-brain.git
+(cd entire-brain && ./scripts/install.sh)
+
+git clone https://github.com/entireio/entire-judge.git
+(cd entire-judge && go build -o entire-judge ./cmd/entire-judge && entire plugin install ./entire-judge --force)
+```
+
+A hand-built brain reports `dev` unless you stamp the version:
+`go build -ldflags "-X main.version=0.3.1" -o entire-brain ./cmd/entire-brain`.
 
 ## Check The Judge Agent
 
@@ -527,6 +546,94 @@ would be invalid, and the team proceeded to demo those numbers anyway. The
 `integrity` lens scores low, anchors the warning to the session where it appeared,
 and raises the red flag — but the submission still ranks, and jurors weigh the flag
 against the rest of the evidence.
+
+## Digging Into How Teams Used Entire
+
+The board scores *whether* a team used Entire (`cli_awareness`), not *what they used it
+for*. In practice jurors follow up on exactly that: which capabilities a team reached for,
+and which developer problems they solved with them — a forgetful agent, picking up someone
+else's context, re-finding code in an unfamiliar repo.
+
+The raw material is already mined. Every session transcript is scanned for three kinds of
+Entire signal:
+
+| Kind | Source |
+| --- | --- |
+| `skill` | the Claude `Skill` tool, or an `/entire` slash prompt |
+| `cli` | a shell tool running `entire …` |
+| `mcp` | an Entire MCP tool, for example `mcp__plugin-entire-graph__search` |
+
+Each signal is tagged with the capability it touched: `graph`, `brain`, `sem`, `judge`,
+`plugin`, `skill`, or `other`.
+
+The dashboard shows this under `cli_awareness` on each detail page:
+
+```
+cli_awareness
+  Multi-capability Entire use across sessions.
+  - 4 skill · 27 CLI · 9 MCP invocation(s) across 6 session(s).
+  - Capabilities: graph, brain, skill.
+  - Reach: brain×5, graph×6, skill×3 (sessions per capability).
+  - Used: graph×14, query×9, brain×7, impact×5, refresh×5, neighbors×3, def×2.
+  - → context continuity: brain used in 5 of 6 session(s) — carried context forward,
+      not just set up once
+  - → code navigation: graph/sem used in 6 session(s) — located code instead of re-reading it
+  - → breadth: 3 capability families used — explored the toolkit
+```
+
+**Reach** counts a capability once per session, which is the line between sustained use and
+setup: the brain in five sessions is context carried forward; five calls inside one session
+is one episode. **Used** names the subcommands actually run. The `→` lines read the pattern
+and name the developer problem it points at.
+
+Those tallies reach `--json` too:
+
+```
+jq '.deterministic | {
+  skills: .entire_skill_invocations,
+  cli: .entire_cli_invocations,
+  mcp: .entire_mcp_invocations,
+  sessions: .entire_signal_sessions,
+  capabilities: .distinct_entire_capabilities,
+  histogram: .entire_signal_histogram
+}' "$REPORTS/team-a.judge.json"
+```
+
+Across the whole field, ordered by breadth of Entire use:
+
+```
+jq -r '.submissions[]
+  | [.submission_id,
+     (.report.deterministic.distinct_entire_capabilities // [] | length),
+     (.report.deterministic.distinct_entire_capabilities // [] | join(","))]
+  | @tsv' "$REPORTS/board.json" | sort -k2 -rn
+```
+
+The evidence strings carry the actual invocations, which is what answers "how did they use
+it":
+
+```
+jq -r '.deterministic.entire_signal_evidence[]?' "$REPORTS/team-a.judge.json"
+```
+
+Read next to the brain's session history, that is usually enough to answer the common
+follow-ups:
+
+* **Forgetful agents, long sessions.** The `brain` capability appearing repeatedly across
+  many sessions rather than once at setup.
+* **Continuing another person's context.** `brain` or session-export use in sessions whose
+  author differs from the one that produced the history being resumed.
+* **Navigating unfamiliar code.** The `graph` capability, especially early in a session,
+  before edits begin.
+
+Two limits to state plainly to the jury:
+
+* `cli_awareness` is deterministic and rewards breadth and sustained use. It cannot tell a
+  considered `entire graph impact` from a reflexive one, and spam still registers as a weak
+  signal — discount it using the evidence bullets.
+* Nothing classifies a signal by the *problem* it solved. That mapping is the juror's read
+  of the evidence, not a score. Treat the capability histogram as a place to look, not a
+  verdict.
 
 ## Recommended Event Workflow
 

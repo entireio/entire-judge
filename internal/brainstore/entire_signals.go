@@ -21,7 +21,14 @@ const (
 	CapabilitySem    = "sem"
 	CapabilityJudge  = "judge"
 	CapabilityPlugin = "plugin"
-	CapabilityOther  = "other"
+	// The Entire CLI is much wider than its plugins. Collapsing session, trail,
+	// review and setup work into "other" hid most of what teams actually did with
+	// it, so each gets its own family.
+	CapabilitySession = "session" // session, checkpoint, cp — capture lifecycle
+	CapabilityTrail   = "trail"   // trail, review — the work-thread surface
+	CapabilitySetup   = "setup"   // enable, auth, doctor, configure, hooks, plugin
+	CapabilityInsight = "insight" // tokens, activity, blame, why, search, experts
+	CapabilityOther   = "other"
 )
 
 // EntireSignal is one detected Entire skill/CLI/MCP use in a session transcript.
@@ -179,10 +186,25 @@ func capabilityFromCLISubcommand(sub string) string {
 		return CapabilityJudge
 	case "plugin", "plugins":
 		return CapabilityPlugin
+
+	// Capture lifecycle: the everyday Entire surface.
+	case "session", "checkpoint", "cp", "clean", "import":
+		return CapabilitySession
+	// Work threads and review.
+	case "trail", "review", "dispatch", "runner":
+		return CapabilityTrail
+	// Getting Entire working, and keeping it working.
+	case "enable", "disable", "configure", "auth", "doctor", "hooks", "mcp",
+		"org", "project", "repo", "grant", "agent", "version", "status":
+		return CapabilitySetup
+	// Asking Entire about the work already captured.
+	case "tokens", "activity", "blame", "why", "investigate", "search", "experts", "recap":
+		return CapabilityInsight
+
 	case "":
 		return CapabilityOther
 	default:
-		// Unknown entire subcommand still counts as CLI awareness.
+		// An unrecognised subcommand is still CLI awareness; it just has no family.
 		return CapabilityOther
 	}
 }

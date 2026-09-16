@@ -93,6 +93,18 @@ type Metrics struct {
 	DistinctEntireCapabilities []string       `json:"distinct_entire_capabilities,omitempty"`
 	EntireSignalHistogram      map[string]int `json:"entire_signal_histogram,omitempty"`
 	EntireSignalEvidence       []string       `json:"entire_signal_evidence,omitempty"`
+
+	// Depth of Entire use, beyond the raw tallies above. A capability touched in
+	// many sessions is a different thing from one touched once at setup, and the
+	// subcommand mix says WHICH capabilities a team actually reached for — the two
+	// questions jurors ask after reading the score.
+	EntireCapabilitySessions map[string]int `json:"entire_capability_sessions,omitempty"`
+	EntireSubcommands        map[string]int `json:"entire_subcommands,omitempty"`
+	// EntireProblemSignals are advisory readings of WHICH developer problem the
+	// usage pattern points at (context continuity, code navigation, …). They are
+	// derived from the pattern, never from an LLM, and are a place to look rather
+	// than a verdict.
+	EntireProblemSignals []string `json:"entire_problem_signals,omitempty"`
 }
 
 // LensComponent is a named sub-score of a lens (e.g. the outcome lens's idea,
