@@ -566,7 +566,27 @@ Entire signal:
 Each signal is tagged with the capability it touched: `graph`, `brain`, `sem`, `judge`,
 `plugin`, `skill`, or `other`.
 
-Those tallies reach `--json` even though the dashboard shows only the 0–5 score:
+The dashboard shows this under `cli_awareness` on each detail page:
+
+```
+cli_awareness
+  Multi-capability Entire use across sessions.
+  - 4 skill · 27 CLI · 9 MCP invocation(s) across 6 session(s).
+  - Capabilities: graph, brain, skill.
+  - Reach: brain×5, graph×6, skill×3 (sessions per capability).
+  - Used: graph×14, query×9, brain×7, impact×5, refresh×5, neighbors×3, def×2.
+  - → context continuity: brain used in 5 of 6 session(s) — carried context forward,
+      not just set up once
+  - → code navigation: graph/sem used in 6 session(s) — located code instead of re-reading it
+  - → breadth: 3 capability families used — explored the toolkit
+```
+
+**Reach** counts a capability once per session, which is the line between sustained use and
+setup: the brain in five sessions is context carried forward; five calls inside one session
+is one episode. **Used** names the subcommands actually run. The `→` lines read the pattern
+and name the developer problem it points at.
+
+Those tallies reach `--json` too:
 
 ```
 jq '.deterministic | {
