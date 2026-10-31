@@ -13,7 +13,7 @@ This plugin builds a binary named `entire-judge`, which is invoked through Entir
 as:
 
 ```sh
-entire judge add <repo-url> [--dir DIR] [--entire-binary BIN] [--build] [--checkpoint-limit N]
+entire judge add [repo-url...] [--from FILE [--column NAME]] [--dir DIR] [--entire-binary BIN] [--build] [--checkpoint-limit N]
 entire judge run [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME] [--json] [--plain]
 entire judge rank [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME] [--json] [--plain]
 entire judge watch [path] [--agent claude-code|codex|ollama|command] [--model M] [--effort E] [--started-at RFC3339] [--theme NAME]
@@ -64,6 +64,9 @@ added submissions to score them all.
 
 ```sh
 entire judge add https://github.com/team/project --dir ./submissions
+
+# or add a whole event from a Devpost export (or a one-URL-per-line file)
+entire judge add --from devpost-projects.csv --dir ./submissions
 entire judge rank ./submissions --started-at <event-start>
 ```
 

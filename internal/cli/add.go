@@ -13,6 +13,8 @@ import (
 )
 
 type addFlags struct {
+	from            string
+	column          string
 	dir             string
 	entireBinary    string
 	build           bool
@@ -22,17 +24,26 @@ type addFlags struct {
 func newAddCommand(opts Options) *cobra.Command {
 	var flags addFlags
 	cmd := &cobra.Command{
-		Use:   "add <repo-url>",
-		Short: "Clone a submission repo, fetch its Entire history, and build its brain",
+		Use:   "add [repo-url...] [--from FILE]",
+		Short: "Clone submission repos, fetch their Entire history, and build their brains",
 		Long: `add readies a submission for judging: it clones the repository, fetches its
 Entire checkpoint history (refs/heads/entire/*), and builds the brain by shelling
 out to ` + "`entire brain refresh sessions`" + ` (configurable via --entire-binary).
-Afterward the submission is scorable with ` + "`entire judge run`" + ` / ` + "`rank`" + `.`,
-		Args: cobra.ExactArgs(1),
+Afterward the submission is scorable with ` + "`entire judge run`" + ` / ` + "`rank`" + `.
+
+Pass one or more repo URLs, or --from a file to add a whole event at once. The
+file can be a plain list (one URL per line, # comments allowed) or a CSV such
+as a Devpost submissions export: every cell is scanned for GitHub, GitLab,
+Codeberg, and Bitbucket repo links (narrow it with --column). Rows with no repo
+link are reported so organizers can chase those teams. One failed submission
+does not stop the rest.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runJudgeAdd(cmd, opts, flags, args[0])
+			return runJudgeAddBatch(cmd, opts, flags, args)
 		},
 	}
+	cmd.Flags().StringVar(&flags.from, "from", "", "Read repo URLs from a file: a plain list, or a CSV export such as Devpost's")
+	cmd.Flags().StringVar(&flags.column, "column", "", "With a CSV --from, only read repo links from this column (case-insensitive header match)")
 	cmd.Flags().StringVar(&flags.dir, "dir", ".", "Directory to clone the submission into")
 	cmd.Flags().StringVar(&flags.entireBinary, "entire-binary", "entire", "Entire CLI binary used to build the brain (`<bin> brain refresh sessions`)")
 	cmd.Flags().BoolVar(&flags.build, "build", true, "Build the brain after cloning (use --build=false to clone only)")
@@ -45,6 +56,9 @@ func runJudgeAdd(cmd *cobra.Command, opts Options, flags addFlags, repoURL strin
 	out := cmd.OutOrStdout()
 	errOut := cmd.ErrOrStderr()
 
+	if strings.HasPrefix(strings.TrimSpace(repoURL), "-") {
+		return fmt.Errorf("invalid_repo_url: %q looks like a command-line option", repoURL)
+	}
 	name := submissionDirName(repoURL)
 	if name == "" {
 		return fmt.Errorf("invalid_repo_url: cannot derive a directory name from %q", repoURL)
@@ -56,7 +70,7 @@ func runJudgeAdd(cmd *cobra.Command, opts Options, flags addFlags, repoURL strin
 		fmt.Fprintf(out, "clone: %s already present, skipping\n", dest)
 	} else {
 		fmt.Fprintf(out, "clone: %s -> %s\n", repoURL, dest)
-		if _, stderr, err := opts.Runner.Run(ctx, "", "git", "clone", "--quiet", repoURL, dest); err != nil {
+		if _, stderr, err := opts.Runner.Run(ctx, "", "git", "clone", "--quiet", "--", repoURL, dest); err != nil {
 			return fmt.Errorf("clone_failed: %v: %s", err, strings.TrimSpace(string(stderr)))
 		}
 	}

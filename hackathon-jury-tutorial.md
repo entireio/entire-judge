@@ -248,8 +248,23 @@ entire judge add https://github.com/team-a/project.git \
   --build=false
 ```
 
-Repeat for every team. `entire judge add` clones the repository and fetches
-`refs/heads/entire/*` from `origin`.
+`entire judge add` clones the repository and fetches `refs/heads/entire/*`
+from `origin`.
+
+To add every team at once, pass several URLs or point `--from` at a file. A
+Devpost submissions export works as-is: every cell is scanned for GitHub,
+GitLab, Codeberg, and Bitbucket repo links (narrow it with `--column`), deep
+links like `/tree/main` are trimmed, duplicates are dropped, and teams with no
+repo link are listed so you can chase them before judging starts.
+
+```sh
+entire judge add --from devpost-projects.csv \
+  --dir "$SUBMISSIONS" \
+  --build=false
+```
+
+A plain text file with one URL per line (and `#` comments) works too. One
+failed clone does not stop the rest; failures are summarized at the end.
 
 This tutorial uses `--build=false` on purpose. The built-in `judge add` build
 step creates the session export, but the best scoring path is to run a full
